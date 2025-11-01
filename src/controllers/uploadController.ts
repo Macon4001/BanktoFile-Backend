@@ -3,6 +3,7 @@ import { PDFParser } from "../services/pdfParser.js";
 import { CSVParser } from "../services/csvParser.js";
 import { CSVGenerator } from "../services/csvGenerator.js";
 import { XLSXGenerator } from "../services/xlsxGenerator.js";
+import { ocrService } from "../services/ocrService.js";
 import { ParsedStatement } from "../types/index.js";
 
 export class UploadController {
@@ -32,13 +33,32 @@ export class UploadController {
       }
 
       const file = req.file;
-      let parsedData: ParsedStatement & { rawText?: string };
+      let parsedData: ParsedStatement & { rawText?: string; usedOCR?: boolean; confidence?: number };
       let rawContent = "";
 
       // Determine file type and parse accordingly
       if (file.mimetype === "application/pdf") {
-        parsedData = await this.pdfParser.parsePDF(file.buffer);
-        rawContent = parsedData.rawText || "";
+        // Try standard PDF text extraction first
+        console.log("🔍 Attempting standard PDF text extraction...");
+        const pdfResult = await this.pdfParser.parsePDF(file.buffer);
+        rawContent = pdfResult.rawText || "";
+
+        // Check if OCR is needed (scanned PDF or no transactions found)
+        if (pdfResult.needsOCR) {
+          console.log("⚠️  PDF parsing found no transactions");
+          console.log("🔧 OCR is disabled - fix the parser instead!");
+          // For now, return the result even if empty so we can see what's wrong
+          parsedData = pdfResult;
+
+          // TODO: Re-enable OCR only for truly scanned documents
+          // if (pdfResult.rawText && pdfResult.rawText.length < 100) {
+          //   console.log("📸 PDF is scanned - would use OCR here");
+          // }
+        } else {
+          // Standard PDF parsing worked
+          console.log("✅ Standard PDF parsing successful");
+          parsedData = pdfResult;
+        }
       } else if (
         file.mimetype === "text/csv" ||
         file.mimetype === "application/vnd.ms-excel" ||
@@ -92,6 +112,8 @@ export class UploadController {
           transactionCount: parsedData.transactions.length,
           metadata: parsedData.metadata,
           format: 'xlsx',
+          usedOCR: parsedData.usedOCR || false,
+          ocrConfidence: parsedData.confidence,
         });
       } else {
         // CSV only
@@ -102,6 +124,8 @@ export class UploadController {
           transactionCount: parsedData.transactions.length,
           metadata: parsedData.metadata,
           format: 'csv',
+          usedOCR: parsedData.usedOCR || false,
+          ocrConfidence: parsedData.confidence,
         });
       }
     } catch (error) {

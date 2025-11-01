@@ -19,8 +19,13 @@ CREATE TABLE users (
 
     -- Plan and usage tracking
     plan VARCHAR(50) NOT NULL DEFAULT 'free' CHECK (plan IN ('free', 'starter', 'professional', 'enterprise')),
-    pages_used INTEGER NOT NULL DEFAULT 0,
-    pages_limit INTEGER NOT NULL DEFAULT 50,
+    pages_used_today INTEGER NOT NULL DEFAULT 0,
+    daily_pages_limit INTEGER NOT NULL DEFAULT 3, -- Daily limit for free plan
+    last_reset_date DATE DEFAULT CURRENT_DATE, -- Track when daily usage was last reset
+
+    -- For paid plans - monthly tracking
+    pages_used_monthly INTEGER NOT NULL DEFAULT 0,
+    monthly_pages_limit INTEGER NOT NULL DEFAULT 50,
 
     -- Subscription period tracking
     current_period_start TIMESTAMP WITH TIME ZONE,
@@ -104,12 +109,25 @@ CREATE TRIGGER update_users_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- Function to reset monthly page usage (call this via cron job)
+-- Function to reset daily page usage for free users
+CREATE OR REPLACE FUNCTION reset_daily_usage()
+RETURNS void AS $$
+BEGIN
+    UPDATE users
+    SET pages_used_today = 0,
+        last_reset_date = CURRENT_DATE,
+        updated_at = NOW()
+    WHERE last_reset_date < CURRENT_DATE
+    AND plan = 'free';
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to reset monthly page usage for paid plans (call this via cron job)
 CREATE OR REPLACE FUNCTION reset_monthly_usage()
 RETURNS void AS $$
 BEGIN
     UPDATE users
-    SET pages_used = 0,
+    SET pages_used_monthly = 0,
         updated_at = NOW()
     WHERE current_period_end < NOW()
     AND subscription_status = 'active';
@@ -123,12 +141,16 @@ SELECT
     u.email,
     u.name,
     u.plan,
-    u.pages_used,
-    u.pages_limit,
-    ROUND((u.pages_used::numeric / NULLIF(u.pages_limit, 0)) * 100, 2) as usage_percentage,
+    CASE WHEN u.plan = 'free' THEN u.pages_used_today ELSE u.pages_used_monthly END as pages_used,
+    CASE WHEN u.plan = 'free' THEN u.daily_pages_limit ELSE u.monthly_pages_limit END as pages_limit,
+    CASE
+        WHEN u.plan = 'free' THEN ROUND((u.pages_used_today::numeric / NULLIF(u.daily_pages_limit, 0)) * 100, 2)
+        ELSE ROUND((u.pages_used_monthly::numeric / NULLIF(u.monthly_pages_limit, 0)) * 100, 2)
+    END as usage_percentage,
     COUNT(cl.id) as total_conversions,
     SUM(cl.pages_converted) as total_pages_converted,
     MAX(cl.timestamp) as last_conversion_at,
+    u.last_reset_date,
     u.created_at,
     u.subscription_status
 FROM users u
@@ -150,8 +172,8 @@ BEGIN
     -- This is just for testing purposes
     v_password_hash := crypt(p_password, gen_salt('bf'));
 
-    INSERT INTO users (email, password_hash, name, plan, pages_limit)
-    VALUES (p_email, v_password_hash, COALESCE(p_name, split_part(p_email, '@', 1)), 'free', 50)
+    INSERT INTO users (email, password_hash, name, plan, daily_pages_limit, monthly_pages_limit)
+    VALUES (p_email, v_password_hash, COALESCE(p_name, split_part(p_email, '@', 1)), 'free', 3, 50)
     RETURNING id INTO v_user_id;
 
     RETURN v_user_id;
@@ -166,7 +188,10 @@ COMMENT ON TABLE subscription_history IS 'Audit log for subscription changes and
 COMMENT ON COLUMN users.stripe_customer_id IS 'Stripe customer ID for payment processing';
 COMMENT ON COLUMN users.subscription_id IS 'Current Stripe subscription ID';
 COMMENT ON COLUMN users.google_id IS 'Google OAuth user ID (null for email/password users)';
-COMMENT ON COLUMN users.pages_used IS 'Number of pages converted in current billing period';
-COMMENT ON COLUMN users.pages_limit IS 'Maximum pages allowed per billing period';
+COMMENT ON COLUMN users.pages_used_today IS 'Number of pages converted today (for free users)';
+COMMENT ON COLUMN users.daily_pages_limit IS 'Daily page limit (primarily for free users - 3 pages/day)';
+COMMENT ON COLUMN users.last_reset_date IS 'Date when daily usage was last reset';
+COMMENT ON COLUMN users.pages_used_monthly IS 'Number of pages converted in current month (for paid users)';
+COMMENT ON COLUMN users.monthly_pages_limit IS 'Monthly page limit (for paid plans)';
 COMMENT ON COLUMN users.current_period_start IS 'Start of current subscription billing period';
 COMMENT ON COLUMN users.current_period_end IS 'End of current subscription billing period';

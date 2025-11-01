@@ -8,6 +8,7 @@ import uploadRoutes from "./routes/upload.js";
 import stripeRoutes from "./routes/stripe.js";
 import webhookRoutes from "./routes/webhooks.js";
 import authRoutes from "./routes/auth.js";
+import { ocrService } from "./services/ocrService.js";
 
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
@@ -55,11 +56,35 @@ app.use((_req: Request, res: Response) => {
   res.status(404).json({ error: "Route not found" });
 });
 
+// Initialize OCR service (optional - can be lazy-loaded on first use)
+// Comment this out if you want faster server startup
+async function initializeServices() {
+  try {
+    console.log('🔧 Initializing OCR service...');
+    // await ocrService.initialize(2); // Initialize with 2 workers
+    // Disabled for now - OCR will be initialized on first use for faster startup
+    console.log('✅ OCR service ready (lazy initialization enabled)');
+  } catch (error) {
+    console.error('⚠️  Failed to initialize OCR service:', error);
+    console.error('OCR functionality may not work properly');
+  }
+}
+
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+
+  // Initialize services in background
+  await initializeServices();
+});
+
+// Graceful shutdown
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  await ocrService.terminate();
+  process.exit(0);
 });
 
 export default app;

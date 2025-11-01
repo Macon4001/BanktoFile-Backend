@@ -55,8 +55,8 @@ router.post('/register', async (req: Request, res: Response) => {
         email: user.email,
         name: userWithPassword.name,
         plan: user.plan,
-        pagesUsed: user.pagesUsed,
-        pagesLimit: user.pagesLimit,
+        pagesUsed: user.plan === 'free' ? user.pagesUsedToday : user.pagesUsedMonthly,
+        pagesLimit: user.plan === 'free' ? user.dailyPagesLimit : user.monthlyPagesLimit,
       },
     });
   } catch (error) {
@@ -106,8 +106,8 @@ router.post('/login', async (req: Request, res: Response) => {
         email: user.email,
         name: (user as any).name || email.split('@')[0],
         plan: user.plan,
-        pagesUsed: user.pagesUsed,
-        pagesLimit: user.pagesLimit,
+        pagesUsed: user.plan === 'free' ? user.pagesUsedToday : user.pagesUsedMonthly,
+        pagesLimit: user.plan === 'free' ? user.dailyPagesLimit : user.monthlyPagesLimit,
       },
     });
   } catch (error) {
@@ -139,8 +139,8 @@ router.get('/me', async (req: Request, res: Response) => {
         email: user.email,
         name: (user as any).name || user.email.split('@')[0],
         plan: user.plan,
-        pagesUsed: user.pagesUsed,
-        pagesLimit: user.pagesLimit,
+        pagesUsed: user.plan === 'free' ? user.pagesUsedToday : user.pagesUsedMonthly,
+        pagesLimit: user.plan === 'free' ? user.dailyPagesLimit : user.monthlyPagesLimit,
         subscriptionStatus: user.subscriptionStatus,
         currentPeriodEnd: user.currentPeriodEnd,
       },
@@ -231,8 +231,8 @@ router.post('/google', async (req: Request, res: Response) => {
         name: (user as any).name || name || email.split('@')[0],
         picture: (user as any).picture || picture,
         plan: user.plan,
-        pagesUsed: user.pagesUsed,
-        pagesLimit: user.pagesLimit,
+        pagesUsed: user.plan === 'free' ? user.pagesUsedToday : user.pagesUsedMonthly,
+        pagesLimit: user.plan === 'free' ? user.dailyPagesLimit : user.monthlyPagesLimit,
       },
     });
   } catch (error) {

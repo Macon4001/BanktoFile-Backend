@@ -2,7 +2,7 @@ import pdfParse from "pdf-parse";
 import { Transaction, ParsedStatement } from "../types/index.js";
 
 export class PDFParser {
-  async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string }> {
+  async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean }> {
     try {
       const data = await pdfParse(buffer);
       const text = data.text;
@@ -10,6 +10,19 @@ export class PDFParser {
       console.log("PDF Text extracted (first 1000 chars):", text.substring(0, 1000)); // Debug log
       console.log("PDF Text length:", text.length); // Debug log
       console.log("PDF Number of pages:", data.numpages); // Debug log
+
+      // Check if the PDF is likely image-based (scanned)
+      const isScanned = this.isLikelyScannedPDF(text, data.numpages);
+
+      if (isScanned) {
+        console.log("⚠️  PDF appears to be scanned/image-based - will need OCR fallback");
+        return {
+          transactions: [],
+          metadata: {},
+          rawText: text,
+          needsOCR: true,
+        };
+      }
 
       // Extract transactions from the PDF text
       const transactions = this.extractTransactions(text);
@@ -19,10 +32,17 @@ export class PDFParser {
         console.log("First transaction:", transactions[0]);
       }
 
+      // If no transactions found despite having text, might still need OCR
+      const needsOCR = transactions.length === 0 && text.length > 0;
+      if (needsOCR) {
+        console.log("⚠️  No transactions found in text - might need OCR fallback");
+      }
+
       return {
         transactions,
         metadata: this.extractMetadata(text),
         rawText: text,
+        needsOCR,
       };
     } catch (error) {
       console.error("Error parsing PDF:", error);
@@ -30,9 +50,59 @@ export class PDFParser {
     }
   }
 
+  /**
+   * Detect if a PDF is likely scanned/image-based
+   * Heuristics:
+   * - Very little text extracted relative to page count
+   * - Text is mostly gibberish or random characters
+   * - Text length is suspiciously short
+   */
+  private isLikelyScannedPDF(text: string, numPages: number): boolean {
+    const textLength = text.trim().length;
+
+    // Average characters per page for a typical text-based bank statement
+    const avgCharsPerPage = 1000;
+    const expectedTextLength = numPages * avgCharsPerPage;
+
+    // If we got less than 20% of expected text, likely scanned
+    if (textLength < expectedTextLength * 0.2) {
+      console.log(`Text too short: ${textLength} chars for ${numPages} pages (expected ~${expectedTextLength})`);
+      return true;
+    }
+
+    // Check for gibberish - too many non-alphanumeric characters
+    const alphanumericCount = (text.match(/[a-zA-Z0-9]/g) || []).length;
+    const alphanumericRatio = alphanumericCount / textLength;
+
+    if (alphanumericRatio < 0.5) {
+      console.log(`Too much gibberish: only ${(alphanumericRatio * 100).toFixed(1)}% alphanumeric`);
+      return true;
+    }
+
+    return false;
+  }
+
   private extractTransactions(text: string): Transaction[] {
     const transactions: Transaction[] = [];
     const lines = text.split("\n");
+
+    // Check if this is a NatWest statement
+    if (text.includes("National Westminster Bank") || text.includes("NATWEST") || text.includes("NatWest")) {
+      console.log("Detected NatWest bank statement");
+      return this.extractNatWestTransactions(text);
+    }
+
+    // Check if this is a Nationwide statement
+    if (text.includes("Nationwide Building Society") || text.includes("FlexDirect") || text.includes("NAIAGB21")) {
+      console.log("Detected Nationwide bank statement");
+      return this.extractNationwideTransactions(text);
+    }
+
+    // Check if this is a Santander statement
+    if (text.includes("Santander") || text.includes("ABBYGB2L")) {
+      console.log("Detected Santander bank statement");
+      return this.extractSantanderTransactions(text);
+    }
 
     // Check if this is a Monzo statement
     if (text.includes("Monzo Bank Limited") || text.includes("monzo.com")) {
@@ -563,6 +633,778 @@ export class PDFParser {
     }
 
     console.log(`Extracted ${transactions.length} Monzo transactions`);
+    return transactions;
+  }
+
+  // Extract transactions from NatWest bank statements
+  private extractNatWestTransactions(text: string): Transaction[] {
+    const transactions: Transaction[] = [];
+    const lines = text.split('\n');
+
+    console.log('Parsing NatWest statement...');
+
+    // NatWest date pattern: "DD MMM" (year is NOT on transaction lines, only on period header)
+    // Examples: "08 SEP", "10 SEP", "11 SEP"
+    const natWestDatePattern = /^(\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))\s+(.+)/i;
+
+    // Extract year from the statement period
+    let statementYear = '2025'; // Default
+    const yearMatch = text.match(/Period Covered.*?(\d{4})/i);
+    if (yearMatch) {
+      statementYear = yearMatch[1];
+      console.log(`Found statement year: ${statementYear}`);
+    }
+
+    // Track the current date for transactions without date prefix
+    let currentDate = '';
+
+    // Parse line by line looking for dates
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Skip empty lines and headers/footers
+      if (!line ||
+          line.includes('National Westminster Bank') ||
+          line.includes('Account Name') ||
+          line.includes('Date Description Paid In') ||
+          line.includes('RETSTMT') ||
+          line.includes('Sort Code') ||
+          line.includes('Statement Date') ||
+          line.includes('Period Covered') ||
+          line.includes('Previous Balance') ||
+          line.includes('Paid In(£)') ||
+          line.includes('Withdrawn(£)') ||
+          line.includes('New Balance') ||
+          line.includes('BIC NWBKGB') ||
+          line.includes('IBAN GB') ||
+          line.includes('Overdraft Limit') ||
+          line.includes('Overdraft Rate') ||
+          line.includes('Debit interest details') ||
+          line.includes('Credit interest details') ||
+          line.includes('Interest Rate') ||
+          line.includes('AER') ||
+          line.includes('Welcome to your') ||
+          line.includes('www.natwest.com') ||
+          line.includes('Over £') || // Skip overdraft usage lines like "Over £0"
+          line.match(/^\d+ of \d+$/) ||
+          line.match(/^Page No$/i) ||
+          line.match(/^\d{6,}\s+\d{2}-\d{2}-\d{2}/) || // Skip lines like "62089331 60-02-13"
+          line.match(/\d+\.\d+%$/)) { // Skip lines ending with percentages like "33.75%"
+        continue;
+      }
+
+      // Handle BROUGHT FORWARD separately
+      if (line.includes('BROUGHT FORWARD')) {
+        const broughtForwardMatch = line.match(/(\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC))\s+.*?BROUGHT FORWARD.*?([\d,]+\.?\d{0,2})/i);
+        if (broughtForwardMatch) {
+          const dateWithoutYear = broughtForwardMatch[1];
+          currentDate = `${dateWithoutYear} ${statementYear}`;
+          const balance = parseFloat(broughtForwardMatch[2].replace(/,/g, ''));
+
+          transactions.push({
+            date: currentDate,
+            description: 'BROUGHT FORWARD',
+            amount: 0,
+            balance,
+            type: 'brought_forward',
+          });
+
+          console.log(`✓ ${currentDate} | BROUGHT FORWARD | Opening Balance: £${balance}`);
+        }
+        continue;
+      }
+
+      const dateMatch = line.match(natWestDatePattern);
+
+      if (dateMatch) {
+        // This line has a date - update current date
+        currentDate = `${dateMatch[1]} ${statementYear}`;
+        console.log(`Found dated transaction: ${currentDate} - ${line.substring(0, 60)}...`);
+        const dateWithoutYear = dateMatch[1];
+        const fullDate = `${dateWithoutYear} ${statementYear}`;
+        let description = dateMatch[2].trim();
+
+        // Collect continuation lines for this transaction
+        let j = i + 1;
+        let fullText = description;
+
+        while (j < lines.length) {
+          const nextLine = lines[j].trim();
+
+          // Stop if we hit another date or footer
+          if (!nextLine ||
+              nextLine.match(natWestDatePattern) ||
+              nextLine.includes('National Westminster Bank') ||
+              nextLine.includes('Account Name') ||
+              nextLine.match(/^\d+ of \d+$/)) {
+            break;
+          }
+
+          // Stop if this line looks like a new transaction (has transaction keywords at start)
+          if (nextLine.match(/^(Card Transaction|Direct Debit|OnLine Transaction|Standing Order|Cash Withdrawal|Automated Credit|Charges)/i)) {
+            break;
+          }
+
+          fullText += ' ' + nextLine;
+          j++;
+        }
+
+        // Extract all numbers (amounts and balances)
+        const numbers = fullText.match(/\d{1,3}(?:,\d{3})*(?:\.\d{2})/g);
+
+        if (numbers && numbers.length >= 1) {
+          const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
+
+          // Find the description (everything before first number)
+          const firstNumberIndex = fullText.indexOf(numbers[0]);
+          let desc = fullText.substring(0, firstNumberIndex).trim();
+
+          // NatWest format has 3 columns: Paid In(£), Withdrawn(£), Balance(£)
+          // Last number is ALWAYS the balance
+          let paidIn = 0;
+          let withdrawn = 0;
+          let balance = amounts[amounts.length - 1];
+          let amount = 0;
+          let type: 'credit' | 'debit' = 'debit';
+
+          if (amounts.length === 2) {
+            // Format: [amount] [balance]
+            // Determine if it's paid in or withdrawn from keywords
+            amount = amounts[0];
+            const lower = desc.toLowerCase();
+            if (lower.includes('automated credit') ||
+                lower.includes('online transaction from') ||
+                lower.includes('paid in')) {
+              paidIn = amount;
+              type = 'credit';
+            } else {
+              withdrawn = amount;
+              type = 'debit';
+            }
+          } else if (amounts.length === 3) {
+            // Format: [paidIn] [withdrawn] [balance]
+            paidIn = amounts[0];
+            withdrawn = amounts[1];
+            balance = amounts[2];
+
+            // Use whichever is non-zero as the transaction amount
+            if (paidIn > 0) {
+              amount = paidIn;
+              type = 'credit';
+            } else if (withdrawn > 0) {
+              amount = withdrawn;
+              type = 'debit';
+            }
+          } else if (amounts.length === 1) {
+            // Just a balance - skip this line
+            continue;
+          }
+
+          // Clean description
+          desc = desc
+            .replace(/\s+/g, ' ')
+            .replace(/FP\s+\d{2}\/\d{2}\/\d{2}\s+\d+\s+\w+/g, '')
+            .replace(/\b\d{10,}\b/g, '')
+            .trim();
+
+          if (amount > 0 && desc) {
+            transactions.push({
+              date: fullDate,
+              description: desc,
+              amount,
+              balance,
+              type,
+            });
+
+            if (transactions.length <= 5) {
+              console.log(`✓ ${fullDate} | ${desc.substring(0, 30)} | ${type} £${amount} | Bal: £${balance}`);
+            }
+          }
+        }
+
+        // Skip to the line after this transaction
+        i = j - 1;
+      } else if (currentDate) {
+        // This line has NO date prefix - it's a continuation transaction on the same date
+        // Example: "Direct Debit BLACK HORSE  226.47 371.36"
+        let fullText = line;
+
+        // Collect continuation lines
+        let j = i + 1;
+        while (j < lines.length) {
+          const nextLine = lines[j].trim();
+
+          // Stop if we hit a new date or footer
+          if (!nextLine ||
+              nextLine.match(natWestDatePattern) ||
+              nextLine.includes('National Westminster Bank') ||
+              nextLine.includes('Account Name') ||
+              nextLine.match(/^\d+ of \d+$/)) {
+            break;
+          }
+
+          // Stop if this line looks like a new transaction
+          if (nextLine.match(/^(Card Transaction|Direct Debit|OnLine Transaction|Standing Order|Cash Withdrawal|Automated Credit|Charges)/i)) {
+            break;
+          }
+
+          fullText += ' ' + nextLine;
+          j++;
+        }
+
+        // Extract numbers
+        const numbers = fullText.match(/\d{1,3}(?:,\d{3})*(?:\.\d{2})/g);
+
+        if (numbers && numbers.length >= 2) {
+          const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
+
+          // Find description
+          const firstNumberIndex = fullText.indexOf(numbers[0]);
+          let desc = fullText.substring(0, firstNumberIndex).trim();
+
+          // Parse amounts
+          let paidIn = 0;
+          let withdrawn = 0;
+          let balance = amounts[amounts.length - 1];
+          let amount = 0;
+          let type: 'credit' | 'debit' = 'debit';
+
+          if (amounts.length === 2) {
+            amount = amounts[0];
+            const lower = desc.toLowerCase();
+            if (lower.includes('automated credit') ||
+                lower.includes('online transaction from') ||
+                lower.includes('paid in')) {
+              paidIn = amount;
+              type = 'credit';
+            } else {
+              withdrawn = amount;
+              type = 'debit';
+            }
+          } else if (amounts.length === 3) {
+            paidIn = amounts[0];
+            withdrawn = amounts[1];
+            balance = amounts[2];
+
+            if (paidIn > 0) {
+              amount = paidIn;
+              type = 'credit';
+            } else if (withdrawn > 0) {
+              amount = withdrawn;
+              type = 'debit';
+            }
+          }
+
+          // Clean description
+          desc = desc
+            .replace(/\s+/g, ' ')
+            .replace(/FP\s+\d{2}\/\d{2}\/\d{2}\s+\d+\s+\w+/g, '')
+            .replace(/\b\d{10,}\b/g, '')
+            .trim();
+
+          if (amount > 0 && desc) {
+            transactions.push({
+              date: currentDate,
+              description: desc,
+              amount,
+              balance,
+              type,
+            });
+
+            if (transactions.length <= 5) {
+              console.log(`✓ ${currentDate} | ${desc.substring(0, 30)} | ${type} £${amount} | Bal: £${balance}`);
+            }
+          }
+        }
+
+        i = j - 1;
+      }
+    }
+
+    console.log(`Extracted ${transactions.length} NatWest transactions`);
+    return transactions;
+  }
+
+  private extractNationwideTransactions(text: string): Transaction[] {
+    const transactions: Transaction[] = [];
+    const lines = text.split('\n');
+
+    console.log('Parsing Nationwide statement...');
+
+    // Nationwide date pattern: "DD MMM" (e.g., "07 Feb" or "07Feb" with no space)
+    const nationwideDatePattern = /^(\d{1,2}\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s*(.+)/i;
+
+    // Extract year from "Statement DD Month YYYY" header
+    let statementYear = '2025'; // Default
+    const yearMatch = text.match(/Statement\s+\d{1,2}\s+\w+\s+(\d{4})/i);
+    if (yearMatch) {
+      statementYear = yearMatch[1];
+      console.log(`Found statement year: ${statementYear}`);
+    }
+
+    // Track current date for multi-line descriptions
+    let currentDate = '';
+
+    // Parse line by line
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Skip empty lines and headers/footers
+      if (!line ||
+          line.includes('Nationwide Building Society') ||
+          line.includes('FlexDirect') ||
+          line.includes('Statement no') ||
+          line.includes('Sort code') ||
+          line.includes('Account no') ||
+          line.includes('Start balance') ||
+          line.includes('End balance') ||
+          line.includes('£ Out') ||
+          line.includes('£ In') ||
+          line.includes('£ Balance') ||
+          line.includes('Average credit') ||
+          line.includes('Average debit') ||
+          line.includes('BIC') ||
+          line.includes('IBAN') ||
+          line.includes('Swift') ||
+          line.includes('Intermediary Bank') ||
+          line.includes('NAIAGB') ||
+          line.includes('MIDLGB') ||
+          line.includes('Prudential Regulation') ||
+          line.includes('Financial Conduct') ||
+          line.includes('Head Office') ||
+          line.includes('DC83') ||
+          line.includes('DC85') ||
+          line.includes('Interest, Rates and Fees') ||
+          line.includes('Summary box') ||
+          line.includes('AER') ||
+          line.includes('Gross p.a') ||
+          line.includes('arranged overdraft') ||
+          line.includes('overdraft interest') ||
+          line.includes('SEPA') ||
+          line.includes('CHAPS') ||
+          line.includes('SWIFT') ||
+          line.includes('visa.co.uk') ||
+          line.includes('nationwide.co.uk') ||
+          line.includes('Receiving money') ||
+          line.includes('Sending money') ||
+          line.match(/^\d{4}$/) || // Skip year-only lines
+          line.match(/^Balance$/i)) {
+        continue;
+      }
+
+      // Handle opening balance specially
+      // Format: "2025Balance from statement 47 dated 05/02/2025313.41" (may have no spaces)
+      if (line.includes('Balance from statement') && line.includes('dated')) {
+        // Match the date pattern first: dated DD/MM/YYYY
+        const dateMatch = line.match(/dated\s*(\d{2})\/(\d{2})\/(\d{4})/i);
+
+        if (dateMatch) {
+          // Everything after the year in the date is the balance
+          const afterDateMatch = line.match(/dated\s*\d{2}\/\d{2}\/\d{4}([\d,]+\.?\d{0,2})/i);
+
+          if (afterDateMatch) {
+            const balance = parseFloat(afterDateMatch[1].replace(/,/g, ''));
+            const day = dateMatch[1];
+            const month = dateMatch[2];
+            const year = dateMatch[3];
+            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+            const monthName = monthNames[parseInt(month) - 1];
+            currentDate = `${day} ${monthName} ${year}`;
+
+            transactions.push({
+              date: currentDate,
+              description: 'BROUGHT FORWARD',
+              amount: 0,
+              balance,
+              type: 'brought_forward',
+            });
+
+            console.log(`✓ Opening Balance: £${balance} on ${currentDate}`);
+          }
+        }
+        continue;
+      }
+
+      // Check if this line starts with a date
+      const dateMatch = line.match(nationwideDatePattern);
+
+      if (dateMatch) {
+        // This line has a date - it's a transaction
+        const dateWithoutYear = dateMatch[1];
+        currentDate = `${dateWithoutYear} ${statementYear}`;
+        let description = dateMatch[2].trim();
+
+        console.log(`Found dated transaction: ${currentDate} - ${line.substring(0, 60)}...`);
+
+        // Nationwide format: "DD MMM Description Out In Balance"
+        // Extract all numbers (Out, In, Balance)
+        const numbers = description.match(/[\d,]+\.?\d{0,2}/g);
+
+        if (numbers && numbers.length >= 1) {
+          const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
+
+          // Find where the first number appears
+          const firstNumberIndex = description.indexOf(numbers[0]);
+          let desc = description.substring(0, firstNumberIndex).trim();
+
+          // Determine transaction type based on number count and position
+          let out = 0;
+          let inAmount = 0;
+          let balance = 0;
+          let amount = 0;
+          let type: 'credit' | 'debit' = 'debit';
+
+          if (amounts.length === 1) {
+            // Only balance (no transaction amount)
+            balance = amounts[0];
+            continue; // Skip lines with only balance
+          } else if (amounts.length === 2) {
+            // Either Out+Balance or In+Balance
+            amount = amounts[0];
+            balance = amounts[1];
+
+            // Check if description suggests credit
+            const lower = desc.toLowerCase();
+            if (lower.includes('bank credit') ||
+                lower.includes('automated credit') ||
+                lower.includes('credit transfer') ||
+                lower.includes('paid in')) {
+              inAmount = amount;
+              type = 'credit';
+            } else {
+              out = amount;
+              type = 'debit';
+            }
+          } else if (amounts.length === 3) {
+            // Out, In, Balance
+            out = amounts[0];
+            inAmount = amounts[1];
+            balance = amounts[2];
+
+            if (inAmount > 0) {
+              amount = inAmount;
+              type = 'credit';
+            } else if (out > 0) {
+              amount = out;
+              type = 'debit';
+            }
+          }
+
+          // Clean description
+          desc = desc
+            .replace(/\s+/g, ' ')
+            .replace(/\bJT bal VW\b/gi, '') // Remove Nationwide-specific codes
+            .trim();
+
+          if (amount > 0 && desc) {
+            transactions.push({
+              date: currentDate,
+              description: desc,
+              amount,
+              balance,
+              type,
+            });
+
+            if (transactions.length <= 5) {
+              console.log(`✓ ${currentDate} | ${desc.substring(0, 30)} | ${type} £${amount} | Bal: £${balance}`);
+            }
+          }
+        }
+      }
+    }
+
+    console.log(`Extracted ${transactions.length} Nationwide transactions`);
+    return transactions;
+  }
+
+  private extractSantanderTransactions(text: string): Transaction[] {
+    const transactions: Transaction[] = [];
+    const lines = text.split('\n');
+
+    console.log('Parsing Santander statement...');
+
+    // Santander date pattern: "16th Sep", "1st Oct" (ordinal + month, may have no space after month)
+    const santanderDatePattern = /^(\d{1,2}(?:st|nd|rd|th)\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))(.+)/i;
+
+    // Extract year from "Your account summary for DDth MMM YYYY to DDth MMM YYYY"
+    let statementYear = '2025'; // Default
+    const yearMatch = text.match(/Your account summary for.*?(\d{4})/i);
+    if (yearMatch) {
+      statementYear = yearMatch[1];
+      console.log(`Found statement year: ${statementYear}`);
+    }
+
+    // Track current date for multi-line descriptions
+    let currentDate = '';
+
+    // Parse line by line
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Skip empty lines and headers/footers
+      if (!line ||
+          line.includes('Santander UK plc') ||
+          line.includes('Santander Banking') ||
+          line.includes('Everyday Current Account') ||
+          line.includes('Telephone Banking') ||
+          line.includes('www.santander.co.uk') ||
+          line.includes('Your account summary for') ||
+          line.includes('Account name') ||
+          line.includes('Account number') ||
+          line.includes('Sort Code') ||
+          line.includes('Statement number') ||
+          line.includes('BIC:') ||
+          line.includes('IBAN:') ||
+          line.includes('ABBY') ||
+          line.includes('Total money in') ||
+          line.includes('Total money out') ||
+          line.includes('Your balance at close') ||
+          line.includes('Credit interest rate') ||
+          line.includes('Online, Mobile and Telephone') ||
+          line.includes('News and information') ||
+          line.includes('Keeping your money safe') ||
+          line.includes('Interest and refunds') ||
+          line.includes('Important messages') ||
+          line.includes('compensation arrangements') ||
+          line.includes('Financial Services Compensation') ||
+          line.includes('Financial Ombudsman') ||
+          line.includes('Prudential Regulation') ||
+          line.includes('Financial Conduct') ||
+          line.includes('Registered Office') ||
+          line.includes('Registered Number') ||
+          line.includes('flame logo') ||
+          line.includes('AER') ||
+          line.includes('EAR') ||
+          line.includes('gross rate') ||
+          line.includes('Average balance') ||
+          line.includes('Money in') && line.includes('Money out') ||
+          line.includes('Money in Money out') ||
+          line.includes('Date Description Money') ||
+          line.includes('Your transactions') ||
+          line.includes('Continued on reverse') ||
+          line.includes('Why we are paying you') ||
+          line.match(/^Page number/i) ||
+          line.match(/^\d{15,}$/) || // Skip long number sequences
+          line.match(/^BX\d+/) || // Skip Santander document IDs
+          line.match(/^%%SSC/)) {
+        continue;
+      }
+
+      // Handle opening balance specially
+      // Format: "Balance brought forward from 15th Sep Statement£128.19" (may have no space before £)
+      // or "16th Sep Balance brought forward from previous statement 128.19"
+      if (line.includes('Balance brought forward')) {
+        // Try to extract date from start of line OR from "from DDth MMM" pattern
+        let balanceDate = '';
+        const startDateMatch = line.match(/^(\d{1,2}(?:st|nd|rd|th)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))/i);
+        if (startDateMatch) {
+          balanceDate = `${startDateMatch[1].replace(/(\d+)(?:st|nd|rd|th)/, '$1')} ${statementYear}`;
+        } else {
+          // Try to extract from "from DDth MMM" pattern
+          const fromDateMatch = line.match(/from\s+(\d{1,2}(?:st|nd|rd|th))\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i);
+          if (fromDateMatch) {
+            const day = fromDateMatch[1].replace(/(?:st|nd|rd|th)/, '');
+            const month = fromDateMatch[2];
+            balanceDate = `${day} ${month} ${statementYear}`;
+          }
+        }
+
+        // Balance is the last number on the line (may be preceded by £ or have no space)
+        // Handle formats: "Statement 128.19" or "Statement£128.19"
+        const balanceMatch = line.match(/[£]?([\d,]+\.?\d{0,2})$/);
+        if (balanceMatch) {
+          const balance = parseFloat(balanceMatch[1].replace(/,/g, ''));
+
+          transactions.push({
+            date: balanceDate || statementYear,
+            description: 'BROUGHT FORWARD',
+            amount: 0,
+            balance,
+            type: 'brought_forward',
+          });
+
+          console.log(`✓ Opening Balance: £${balance} on ${balanceDate || statementYear}`);
+        }
+        continue;
+      }
+
+      // Handle "Balance carried forward" at the end
+      if (line.includes('Balance carried forward')) {
+        continue;
+      }
+
+      // Check if this line starts with a date
+      const dateMatch = line.match(santanderDatePattern);
+
+      if (dateMatch) {
+        // Skip lines that are part of the date range header (e.g., "16th Sep 2025 to 15th Oct 2025")
+        if (line.includes(' to ') && line.includes(statementYear)) {
+          console.log(`Skipping date range header: ${line}`);
+          continue;
+        }
+
+        // This line has a date - it's a transaction
+        const dateWithoutYear = dateMatch[1];
+        // Normalize the date by removing ordinal suffixes
+        const normalizedDate = dateWithoutYear.replace(/(\d+)(?:st|nd|rd|th)/, '$1');
+        currentDate = `${normalizedDate} ${statementYear}`;
+        let description = dateMatch[2].trim();
+
+        console.log(`Found dated transaction: ${currentDate} - ${description.substring(0, 60)}...`);
+
+        // Collect continuation lines for multi-line transactions
+        let j = i + 1;
+        let fullText = description;
+
+        while (j < lines.length) {
+          const nextLine = lines[j].trim();
+
+          // Stop if we hit another date or end of transactions
+          if (!nextLine ||
+              nextLine.match(santanderDatePattern) ||
+              nextLine.includes('Balance carried forward') ||
+              nextLine.includes('Average balance')) {
+            break;
+          }
+
+          fullText += ' ' + nextLine;
+          j++;
+        }
+
+        // Santander format: "DDth MMM Description MoneyIn MoneyOut Balance"
+        console.log(`\n=== PROCESSING TRANSACTION ===`);
+        console.log(`Date: ${currentDate}`);
+        console.log(`Original fullText: "${fullText}"`);
+
+        // First, split concatenated decimal numbers BEFORE removing anything
+        // This handles cases like "00262.97125.22" -> "00262.97 125.22"
+        // Look for pattern: digit.XX followed by 1-4 digits and a decimal point
+        let cleanedText = fullText.replace(/(\.\d{2})(\d{1,4}\.\d{2})/g, '$1 $2');
+        console.log(`After splitting concatenated numbers: "${cleanedText}"`);
+
+        // Now clean up the text - remove MANDATE NO and REF codes
+        // IMPORTANT: Use word boundaries to avoid removing parts of decimal numbers
+        cleanedText = cleanedText
+          .replace(/MANDATE NO\s+\d+(?!\.\d)/gi, ' ') // Remove mandate number but not if followed by decimal
+          .replace(/REF\s+[A-Z0-9]+/gi, ' ') // Replace with space
+          .replace(/\d{2}-\d{2}-\d{4}/g, ' ') // Replace dates with space
+          .replace(/ON\s+\d{2}-\d{2}-\d{4}/gi, ' '); // Replace date references
+
+        console.log(`After cleaning text: "${cleanedText}"`);
+
+        // Extract ALL numbers with 2 decimal places
+        const numbers = cleanedText.match(/\d{1,4}\.\d{2}/g) || [];
+
+        console.log(`Found ${numbers.length} numbers:`, numbers);
+
+        if (numbers && numbers.length >= 1) {
+          const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
+
+          // Find where the first number appears in the ORIGINAL fullText (for description)
+          const firstNumberMatch = fullText.match(/[\d,]+\.?\d{0,2}/);
+          const firstNumberIndex = firstNumberMatch ? fullText.indexOf(firstNumberMatch[0]) : fullText.length;
+          let desc = fullText.substring(0, firstNumberIndex).trim();
+
+          // Determine transaction type based on number count
+          let moneyIn = 0;
+          let moneyOut = 0;
+          let balance = 0;
+          let amount = 0;
+          let type: 'credit' | 'debit' = 'debit';
+
+          if (amounts.length === 1) {
+            // Only one number found - try alternative extraction from original text
+            // Remove MANDATE NO patterns first to avoid extracting mandate numbers
+            let cleanForExtraction = fullText
+              .replace(/MANDATE NO\s+\d+/gi, ' ')
+              .replace(/REF\s+[A-Z0-9]+/gi, ' ');
+
+            // Split concatenated numbers like "2.97125.22" -> "2.97 125.22"
+            cleanForExtraction = cleanForExtraction.replace(/(\.\d{2})(\d{1,4}\.\d{2})/g, '$1 $2');
+
+            // Extract ALL decimal numbers (with proper decimal format)
+            const allNumbers = cleanForExtraction.match(/\d+\.\d{2}/g) || [];
+            console.log(`Only 1 number after cleaning. Trying raw extraction (after removing MANDATE NO and splitting), found:`, allNumbers);
+
+            if (allNumbers.length >= 2) {
+              // Use the last 2 numbers (amount and balance)
+              const rawAmounts = allNumbers.map(n => parseFloat(n));
+              amount = rawAmounts[rawAmounts.length - 2];
+              balance = rawAmounts[rawAmounts.length - 1];
+
+              // Determine type from description
+              const lower = desc.toLowerCase();
+              if (lower.includes('faster payments receipt') || lower.includes('receipt') || lower.includes('credit')) {
+                type = 'credit';
+              } else {
+                type = 'debit';
+              }
+
+              console.log(`✓ Extracted from raw: amount=${amount}, balance=${balance}, type=${type}`);
+            } else {
+              console.log(`Skipping line - couldn't extract enough numbers: "${fullText.substring(0, 100)}"`);
+              continue;
+            }
+          } else if (amounts.length === 2) {
+            // Either MoneyIn+Balance or MoneyOut+Balance
+            amount = amounts[0];
+            balance = amounts[1];
+
+            // Check if description suggests credit
+            const lower = desc.toLowerCase();
+            if (lower.includes('faster payments receipt') ||
+                lower.includes('credit') ||
+                lower.includes('payment receipt') ||
+                lower.includes('receipt ref')) {
+              moneyIn = amount;
+              type = 'credit';
+            } else {
+              moneyOut = amount;
+              type = 'debit';
+            }
+          } else if (amounts.length === 3) {
+            // MoneyIn, MoneyOut, Balance
+            moneyIn = amounts[0];
+            moneyOut = amounts[1];
+            balance = amounts[2];
+
+            if (moneyIn > 0) {
+              amount = moneyIn;
+              type = 'credit';
+            } else if (moneyOut > 0) {
+              amount = moneyOut;
+              type = 'debit';
+            }
+          }
+
+          // Clean description
+          desc = desc
+            .replace(/\s+/g, ' ')
+            .replace(/MANDATE NO \d+/gi, '') // Remove mandate numbers
+            .replace(/REF\s+[A-Z0-9]+/gi, '') // Remove reference codes
+            .trim();
+
+          if (amount > 0 && desc) {
+            transactions.push({
+              date: currentDate,
+              description: desc,
+              amount,
+              balance,
+              type,
+            });
+
+            if (transactions.length <= 5) {
+              console.log(`✓ ${currentDate} | ${desc.substring(0, 30)} | ${type} £${amount} | Bal: £${balance}`);
+            }
+          }
+        }
+
+        // Skip to the line after this transaction
+        i = j - 1;
+      }
+    }
+
+    console.log(`Extracted ${transactions.length} Santander transactions`);
     return transactions;
   }
 
