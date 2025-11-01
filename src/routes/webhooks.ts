@@ -120,8 +120,8 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
   db.updateUser(userId, {
     subscriptionId: subscription.id,
     subscriptionStatus: subscription.status as any,
-    currentPeriodStart: new Date(subscription.current_period_start * 1000),
-    currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+    currentPeriodStart: new Date((subscription as any).current_period_start * 1000),
+    currentPeriodEnd: new Date((subscription as any).current_period_end * 1000),
     ...(plan && {
       plan: plan,
       pagesLimit: getPagesLimit(plan),
@@ -159,7 +159,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 
 // Handle successful payment (subscription renewal)
 async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
-  const subscriptionId = invoice.subscription as string;
+  const subscriptionId = (invoice as any).subscription as string;
 
   if (!subscriptionId) {
     return;
@@ -178,7 +178,7 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
 
 // Handle failed payment
 async function handlePaymentFailed(invoice: Stripe.Invoice) {
-  const subscriptionId = invoice.subscription as string;
+  const subscriptionId = (invoice as any).subscription as string;
 
   if (!subscriptionId) {
     return;

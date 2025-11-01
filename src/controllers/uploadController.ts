@@ -3,7 +3,7 @@ import { PDFParser } from "../services/pdfParser.js";
 import { CSVParser } from "../services/csvParser.js";
 import { CSVGenerator } from "../services/csvGenerator.js";
 import { XLSXGenerator } from "../services/xlsxGenerator.js";
-import { ocrService } from "../services/ocrService.js";
+// import { ocrService } from "../services/ocrService.js"; // Reserved for future OCR features
 import { ParsedStatement } from "../types/index.js";
 
 export class UploadController {
