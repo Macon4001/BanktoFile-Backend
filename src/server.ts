@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  origin: (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, ''), // Remove trailing slash
   credentials: true,
   optionsSuccessStatus: 200,
   exposedHeaders: ['Content-Type', 'Content-Length'],

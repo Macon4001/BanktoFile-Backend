@@ -139,7 +139,8 @@ class PostgresStore {
       await client.query(
         `UPDATE users
          SET pages_used_today = 0, last_reset_date = CURRENT_DATE
-         WHERE email = $1 AND plan = 'free' AND last_reset_date < CURRENT_DATE`
+         WHERE email = $1 AND plan = 'free' AND last_reset_date < CURRENT_DATE`,
+        [email]
       );
 
       const result = await client.query<User>(
