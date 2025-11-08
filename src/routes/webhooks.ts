@@ -88,16 +88,17 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
     return;
   }
 
-  // Update user with customer ID
+  // Update user with customer ID and reset usage
   await db.updateUser(userId, {
     stripe_customer_id: session.customer as string,
     subscription_id: session.subscription as string,
     plan: plan,
     monthly_pages_limit: getPagesLimit(plan),
+    pages_used_monthly: 0, // Reset usage on new purchase
     subscription_status: 'active',
   });
 
-  console.log(`Checkout completed for user ${userId}, plan: ${plan}`);
+  console.log(`Checkout completed for user ${userId}, plan: ${plan}, limit: ${getPagesLimit(plan)} pages`);
 }
 
 // Handle subscription updates
