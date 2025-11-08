@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { stripe, PRICING_TIERS, PlanType } from '../config/stripe.js';
-import { db } from '../db/memoryStore.js';
+import { db } from '../db/postgres.js';
 
 const router = Router();
 
@@ -21,9 +21,9 @@ router.post('/create-checkout-session', async (req: Request, res: Response) => {
     const planDetails = PRICING_TIERS[plan as PlanType];
 
     // Create or get user
-    let user = userId ? db.getUserById(userId) : db.getUserByEmail(email);
+    let user = userId ? await db.getUserById(userId) : await db.getUserByEmail(email);
     if (!user) {
-      user = db.createUser(email);
+      user = await db.createUser(email);
     }
 
     // Create Stripe checkout session
@@ -68,13 +68,13 @@ router.post('/create-portal-session', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'User ID is required' });
     }
 
-    const user = db.getUserById(userId);
-    if (!user || !user.stripeCustomerId) {
+    const user = await db.getUserById(userId);
+    if (!user || !user.stripe_customer_id) {
       return res.status(404).json({ error: 'User or customer not found' });
     }
 
     const session = await stripe.billingPortal.sessions.create({
-      customer: user.stripeCustomerId,
+      customer: user.stripe_customer_id,
       return_url: `${process.env.FRONTEND_URL}/dashboard`,
     });
 
@@ -90,7 +90,7 @@ router.get('/subscription-status/:userId', async (req: Request, res: Response) =
   try {
     const { userId } = req.params;
 
-    const user = db.getUserById(userId);
+    const user = await db.getUserById(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -99,8 +99,8 @@ router.get('/subscription-status/:userId', async (req: Request, res: Response) =
       plan: user.plan,
       pagesUsed: user.pagesUsed,
       pagesLimit: user.pagesLimit,
-      subscriptionStatus: user.subscriptionStatus,
-      currentPeriodEnd: user.currentPeriodEnd,
+      subscriptionStatus: user.subscription_status,
+      currentPeriodEnd: user.current_period_end,
     });
   } catch (error) {
     console.error('Error fetching subscription status:', error);

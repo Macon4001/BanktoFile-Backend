@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { stripe, getPagesLimit, PlanType } from '../config/stripe.js';
-import { db } from '../db/memoryStore.js';
+import { db } from '../db/postgres.js';
 import Stripe from 'stripe';
 
 const router = Router();
@@ -82,19 +82,19 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
     return;
   }
 
-  const user = db.getUserById(userId);
+  const user = await db.getUserById(userId);
   if (!user) {
     console.error('User not found:', userId);
     return;
   }
 
   // Update user with customer ID
-  db.updateUser(userId, {
-    stripeCustomerId: session.customer as string,
-    subscriptionId: session.subscription as string,
+  await db.updateUser(userId, {
+    stripe_customer_id: session.customer as string,
+    subscription_id: session.subscription as string,
     plan: plan,
-    pagesLimit: getPagesLimit(plan),
-    subscriptionStatus: 'active',
+    monthly_pages_limit: getPagesLimit(plan),
+    subscription_status: 'active',
   });
 
   console.log(`Checkout completed for user ${userId}, plan: ${plan}`);
@@ -109,7 +109,7 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
     return;
   }
 
-  const user = db.getUserById(userId);
+  const user = await db.getUserById(userId);
   if (!user) {
     console.error('User not found:', userId);
     return;
@@ -117,14 +117,14 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
 
   const plan = subscription.metadata?.plan as PlanType;
 
-  db.updateUser(userId, {
-    subscriptionId: subscription.id,
-    subscriptionStatus: subscription.status as any,
-    currentPeriodStart: new Date((subscription as any).current_period_start * 1000),
-    currentPeriodEnd: new Date((subscription as any).current_period_end * 1000),
+  await db.updateUser(userId, {
+    subscription_id: subscription.id,
+    subscription_status: subscription.status as any,
+    current_period_start: new Date((subscription as any).current_period_start * 1000),
+    current_period_end: new Date((subscription as any).current_period_end * 1000),
     ...(plan && {
       plan: plan,
-      pagesLimit: getPagesLimit(plan),
+      monthly_pages_limit: getPagesLimit(plan),
     }),
   });
 
@@ -140,18 +140,18 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
     return;
   }
 
-  const user = db.getUserById(userId);
+  const user = await db.getUserById(userId);
   if (!user) {
     console.error('User not found:', userId);
     return;
   }
 
   // Downgrade to free plan
-  db.updateUser(userId, {
+  await db.updateUser(userId, {
     plan: 'free',
-    pagesLimit: getPagesLimit('free'),
-    subscriptionStatus: 'canceled',
-    subscriptionId: undefined,
+    daily_pages_limit: getPagesLimit('free'),
+    subscription_status: 'canceled',
+    subscription_id: undefined,
   });
 
   console.log(`Subscription canceled for user ${userId}`);
@@ -166,12 +166,12 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
   }
 
   // Find user by subscription ID
-  const allUsers = db.getAllUsers();
-  const user = allUsers.find(u => u.subscriptionId === subscriptionId);
+  const allUsers = await db.getAllUsers();
+  const user = allUsers.find(u => u.subscription_id === subscriptionId);
 
   if (user) {
     // Reset usage on successful payment (new billing period)
-    db.resetUsage(user.id);
+    await db.resetUsage(user.id);
     console.log(`Payment succeeded, usage reset for user ${user.id}`);
   }
 }
@@ -185,12 +185,12 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
   }
 
   // Find user by subscription ID
-  const allUsers = db.getAllUsers();
-  const user = allUsers.find(u => u.subscriptionId === subscriptionId);
+  const allUsers = await db.getAllUsers();
+  const user = allUsers.find(u => u.subscription_id === subscriptionId);
 
   if (user) {
-    db.updateUser(user.id, {
-      subscriptionStatus: 'past_due',
+    await db.updateUser(user.id, {
+      subscription_status: 'past_due',
     });
     console.log(`Payment failed for user ${user.id}`);
   }

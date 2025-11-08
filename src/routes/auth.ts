@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { db } from '../db/memoryStore.js';
+import { db } from '../db/postgres.js';
 import { OAuth2Client } from 'google-auth-library';
 
 const router = Router();
@@ -20,7 +20,7 @@ router.post('/register', async (req: Request, res: Response) => {
     }
 
     // Check if user already exists
-    const existingUser = db.getUserByEmail(email);
+    const existingUser = await db.getUserByEmail(email);
     if (existingUser) {
       return res.status(400).json({ error: 'User already exists' });
     }
@@ -29,16 +29,10 @@ router.post('/register', async (req: Request, res: Response) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Create user
-    const user = db.createUser(email);
-
-    // Store hashed password (extend user object)
-    const userWithPassword = {
-      ...user,
-      password: hashedPassword,
+    const user = await db.createUser(email, {
+      password_hash: hashedPassword,
       name: name || email.split('@')[0],
-    };
-
-    db.updateUser(user.id, userWithPassword as any);
+    });
 
     // Generate JWT token
     const token = jwt.sign(
@@ -53,7 +47,7 @@ router.post('/register', async (req: Request, res: Response) => {
       user: {
         id: user.id,
         email: user.email,
-        name: userWithPassword.name,
+        name: user.name,
         plan: user.plan,
         pagesUsed: user.plan === 'free' ? user.pagesUsedToday : user.pagesUsedMonthly,
         pagesLimit: user.plan === 'free' ? user.dailyPagesLimit : user.monthlyPagesLimit,
@@ -75,13 +69,13 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     // Find user
-    const user = db.getUserByEmail(email);
+    const user = await db.getUserByEmail(email);
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     // Verify password
-    const userPassword = (user as any).password;
+    const userPassword = user.password_hash;
     if (!userPassword) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -104,7 +98,7 @@ router.post('/login', async (req: Request, res: Response) => {
       user: {
         id: user.id,
         email: user.email,
-        name: (user as any).name || email.split('@')[0],
+        name: user.name || email.split('@')[0],
         plan: user.plan,
         pagesUsed: user.plan === 'free' ? user.pagesUsedToday : user.pagesUsedMonthly,
         pagesLimit: user.plan === 'free' ? user.dailyPagesLimit : user.monthlyPagesLimit,
@@ -127,7 +121,7 @@ router.get('/me', async (req: Request, res: Response) => {
     const token = authHeader.substring(7);
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string };
 
-    const user = db.getUserById(decoded.userId);
+    const user = await db.getUserById(decoded.userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -137,12 +131,12 @@ router.get('/me', async (req: Request, res: Response) => {
       user: {
         id: user.id,
         email: user.email,
-        name: (user as any).name || user.email.split('@')[0],
+        name: user.name || user.email.split('@')[0],
         plan: user.plan,
         pagesUsed: user.plan === 'free' ? user.pagesUsedToday : user.pagesUsedMonthly,
         pagesLimit: user.plan === 'free' ? user.dailyPagesLimit : user.monthlyPagesLimit,
-        subscriptionStatus: user.subscriptionStatus,
-        currentPeriodEnd: user.currentPeriodEnd,
+        subscriptionStatus: user.subscription_status,
+        currentPeriodEnd: user.current_period_end,
       },
     });
   } catch (error) {
@@ -165,7 +159,7 @@ router.get('/conversions', async (req: Request, res: Response) => {
     const token = authHeader.substring(7);
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
 
-    const logs = db.getConversionLogs(decoded.userId);
+    const logs = await db.getConversionLogs(decoded.userId);
 
     res.json({
       success: true,
@@ -200,19 +194,18 @@ router.post('/google', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid token' });
     }
 
-    const { email, name, picture } = payload;
+    const { email, name, picture, sub: googleId } = payload;
 
     // Check if user exists
-    let user = db.getUserByEmail(email);
+    let user = await db.getUserByEmail(email);
 
     if (!user) {
       // Create new user
-      user = db.createUser(email);
-      db.updateUser(user.id, {
-        ...user,
+      user = await db.createUser(email, {
         name: name || email.split('@')[0],
+        google_id: googleId,
         picture,
-      } as any);
+      });
     }
 
     // Generate JWT token
@@ -228,8 +221,8 @@ router.post('/google', async (req: Request, res: Response) => {
       user: {
         id: user.id,
         email: user.email,
-        name: (user as any).name || name || email.split('@')[0],
-        picture: (user as any).picture || picture,
+        name: user.name || name || email.split('@')[0],
+        picture: user.picture || picture,
         plan: user.plan,
         pagesUsed: user.plan === 'free' ? user.pagesUsedToday : user.pagesUsedMonthly,
         pagesLimit: user.plan === 'free' ? user.dailyPagesLimit : user.monthlyPagesLimit,

@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { db } from '../db/memoryStore.js';
+import { db } from '../db/postgres.js';
 import pdf from 'pdf-parse';
 
 // Extend Express Request to include user info
@@ -44,7 +44,7 @@ export async function countPagesMiddleware(req: Request, res: Response, next: Ne
 /**
  * Middleware to check if user has enough pages remaining
  */
-export function checkPageLimitMiddleware(req: Request, res: Response, next: NextFunction) {
+export async function checkPageLimitMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
     // Get user ID from request (could be from session, cookie, or header)
     const userId = req.headers['x-user-id'] as string || req.query.userId as string;
@@ -52,14 +52,14 @@ export function checkPageLimitMiddleware(req: Request, res: Response, next: Next
     if (!userId) {
       // No user ID provided - create anonymous user with free tier
       const email = `anonymous_${Date.now()}@temp.local`;
-      const user = db.createUser(email);
+      const user = await db.createUser(email);
       req.userId = user.id;
       console.log(`Created anonymous user: ${user.id}`);
       return next();
     }
 
     req.userId = userId;
-    const user = db.getUserById(userId);
+    const user = await db.getUserById(userId);
 
     if (!user) {
       return res.status(404).json({
@@ -69,10 +69,10 @@ export function checkPageLimitMiddleware(req: Request, res: Response, next: Next
     }
 
     const pagesNeeded = req.pagesInFile || 1;
-    const canConvert = db.canConvert(userId, pagesNeeded);
+    const canConvert = await db.canConvert(userId, pagesNeeded);
 
     if (!canConvert) {
-      const pagesRemaining = Math.max(0, user.pagesLimit - user.pagesUsed);
+      const pagesRemaining = Math.max(0, user.pagesLimit! - user.pagesUsed!);
       return res.status(403).json({
         error: 'Page limit exceeded',
         code: 'PAGE_LIMIT_EXCEEDED',
@@ -85,7 +85,7 @@ export function checkPageLimitMiddleware(req: Request, res: Response, next: Next
       });
     }
 
-    console.log(`User ${userId} has ${user.pagesLimit - user.pagesUsed} pages remaining`);
+    console.log(`User ${userId} has ${user.pagesLimit! - user.pagesUsed!} pages remaining`);
     next();
   } catch (error) {
     console.error('Error in page limit middleware:', error);
@@ -112,19 +112,26 @@ export function logConversionMiddleware(req: Request, res: Response, next: NextF
       const fileName = req.file?.originalname || 'unknown';
 
       if (userId) {
-        db.logConversion(userId, fileName, pagesConverted);
-        console.log(`Logged conversion: ${fileName} (${pagesConverted} pages) for user ${userId}`);
+        // Log conversion asynchronously
+        db.logConversion(userId, fileName, pagesConverted).then(() => {
+          console.log(`Logged conversion: ${fileName} (${pagesConverted} pages) for user ${userId}`);
+        }).catch(err => {
+          console.error('Error logging conversion:', err);
+        });
 
-        // Add usage info to response
-        const user = db.getUserById(userId);
-        if (user) {
-          body.usage = {
-            pagesUsed: user.pagesUsed,
-            pagesLimit: user.pagesLimit,
-            pagesRemaining: user.pagesLimit - user.pagesUsed,
-            plan: user.plan,
-          };
-        }
+        // Add usage info to response (fetch user asynchronously)
+        db.getUserById(userId).then(user => {
+          if (user) {
+            body.usage = {
+              pagesUsed: user.pagesUsed,
+              pagesLimit: user.pagesLimit,
+              pagesRemaining: user.pagesLimit! - user.pagesUsed!,
+              plan: user.plan,
+            };
+          }
+        }).catch(err => {
+          console.error('Error fetching user for usage info:', err);
+        });
       }
     }
 
