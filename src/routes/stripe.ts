@@ -92,15 +92,46 @@ router.post('/create-portal-session', async (req: Request, res: Response) => {
       });
     }
 
-    const session = await stripe.billingPortal.sessions.create({
-      customer: user.stripe_customer_id,
-      return_url: `${process.env.FRONTEND_URL}/dashboard`,
-    });
+    console.log(`Creating portal session for customer: ${user.stripe_customer_id}`);
+    console.log(`Return URL: ${process.env.FRONTEND_URL}/dashboard`);
 
-    res.json({ url: session.url });
+    try {
+      const session = await stripe.billingPortal.sessions.create({
+        customer: user.stripe_customer_id,
+        return_url: `${process.env.FRONTEND_URL}/dashboard`,
+      });
+
+      console.log(`Portal session created successfully: ${session.id}`);
+      return res.json({ url: session.url });
+    } catch (stripeError: any) {
+      // Stripe-specific error handling
+      if (stripeError.type === 'StripeInvalidRequestError') {
+        console.error('Stripe configuration error:', stripeError.message);
+
+        // Check if it's the common "billing portal not activated" error
+        if (stripeError.message?.includes('customer portal') || stripeError.message?.includes('not activated')) {
+          return res.status(500).json({
+            error: 'Billing portal not configured',
+            message: 'The billing portal is not yet activated in Stripe. Please activate it in your Stripe Dashboard under Settings → Billing → Customer portal.',
+          });
+        }
+      }
+      throw stripeError; // Re-throw to be caught by outer catch
+    }
   } catch (error) {
-    console.error('Error creating portal session:', error);
-    res.status(500).json({ error: 'Failed to create portal session' });
+    // Enhanced error logging
+    console.error('Error creating portal session:');
+    console.error('Error type:', error instanceof Error ? error.constructor.name : typeof error);
+    console.error('Error message:', error instanceof Error ? error.message : String(error));
+    console.error('Full error:', JSON.stringify(error, null, 2));
+
+    // Return more specific error message
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    res.status(500).json({
+      error: 'Failed to create portal session',
+      message: errorMessage,
+      details: process.env.NODE_ENV === 'development' ? error : undefined,
+    });
   }
 });
 
