@@ -1,8 +1,10 @@
 import { Router, Request, Response } from 'express';
 import { stripe, PRICING_TIERS, PlanType } from '../config/stripe.js';
 import { db } from '../db/postgres.js';
+import jwt from 'jsonwebtoken';
 
 const router = Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-production';
 
 // Create Checkout Session
 router.post('/create-checkout-session', async (req: Request, res: Response) => {
@@ -59,18 +61,35 @@ router.post('/create-checkout-session', async (req: Request, res: Response) => {
   }
 });
 
-// Get Customer Portal
+// Get Customer Portal - Protected route
 router.post('/create-portal-session', async (req: Request, res: Response) => {
   try {
-    const { userId } = req.body;
-
-    if (!userId) {
-      return res.status(400).json({ error: 'User ID is required' });
+    // Authenticate user from JWT token
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'No token provided' });
     }
 
-    const user = await db.getUserById(userId);
-    if (!user || !user.stripe_customer_id) {
-      return res.status(404).json({ error: 'User or customer not found' });
+    const token = authHeader.substring(7);
+    let decoded: { userId: string; email: string };
+
+    try {
+      decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string };
+    } catch (err) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    // Get user from token (not from request body for security)
+    const user = await db.getUserById(decoded.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.stripe_customer_id) {
+      return res.status(400).json({
+        error: 'No active subscription',
+        message: 'You need to subscribe to a plan first to manage billing.'
+      });
     }
 
     const session = await stripe.billingPortal.sessions.create({
