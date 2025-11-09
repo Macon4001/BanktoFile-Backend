@@ -73,6 +73,25 @@ export async function checkPageLimitMiddleware(req: Request, res: Response, next
 
     if (!canConvert) {
       const pagesRemaining = Math.max(0, user.pagesLimit! - user.pagesUsed!);
+
+      // Check if it's a subscription issue or limit issue
+      if (user.plan !== 'free' && user.subscription_status !== 'active') {
+        const statusMessages: Record<string, string> = {
+          'past_due': 'Your subscription payment failed. Please update your payment method to continue.',
+          'canceled': 'Your subscription has been canceled. Please renew to continue using paid features.',
+          'incomplete': 'Your subscription setup is incomplete. Please complete the payment process.',
+          'unpaid': 'Your subscription is unpaid. Please update your payment method to continue.',
+        };
+
+        return res.status(403).json({
+          error: 'Subscription inactive',
+          code: 'SUBSCRIPTION_INACTIVE',
+          subscriptionStatus: user.subscription_status,
+          plan: user.plan,
+          message: statusMessages[user.subscription_status || ''] || 'Your subscription is not active. Please contact support.',
+        });
+      }
+
       return res.status(403).json({
         error: 'Page limit exceeded',
         code: 'PAGE_LIMIT_EXCEEDED',

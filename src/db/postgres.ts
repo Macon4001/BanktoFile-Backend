@@ -310,13 +310,40 @@ class PostgresStore {
       );
 
       const result = await client.query<User>(
-        'SELECT plan, pages_used_today, daily_pages_limit, pages_used_monthly, monthly_pages_limit FROM users WHERE id = $1',
+        'SELECT plan, pages_used_today, daily_pages_limit, pages_used_monthly, monthly_pages_limit, subscription_status, current_period_end FROM users WHERE id = $1',
         [userId]
       );
 
       if (!result.rows[0]) return false;
 
       const user = result.rows[0];
+
+      // Check subscription status for paid users
+      if (user.plan !== 'free') {
+        // Block users with past_due status (payment failed)
+        if (user.subscription_status === 'past_due') {
+          console.log(`User ${userId} blocked: subscription is past_due`);
+          return false;
+        }
+
+        // Block canceled users who are past their period end
+        if (user.subscription_status === 'canceled' && user.current_period_end) {
+          const now = new Date();
+          const periodEnd = new Date(user.current_period_end);
+          if (now > periodEnd) {
+            console.log(`User ${userId} blocked: canceled subscription period has ended`);
+            return false;
+          }
+        }
+
+        // Block other inactive statuses
+        if (['incomplete', 'incomplete_expired', 'unpaid'].includes(user.subscription_status || '')) {
+          console.log(`User ${userId} blocked: subscription status is ${user.subscription_status}`);
+          return false;
+        }
+      }
+
+      // Check page limits
       if (user.plan === 'free') {
         return (user.pages_used_today + pagesNeeded) <= user.daily_pages_limit;
       } else {

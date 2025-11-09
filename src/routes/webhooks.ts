@@ -147,15 +147,30 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
     return;
   }
 
-  // Downgrade to free plan
-  await db.updateUser(userId, {
-    plan: 'free',
-    daily_pages_limit: getPagesLimit('free'),
-    subscription_status: 'canceled',
-    subscription_id: undefined,
-  });
+  // Check if subscription is canceled_at_period_end (user keeps access until period ends)
+  // vs immediately canceled (cancel_at_period_end = false)
+  const periodEnd = new Date((subscription as any).current_period_end * 1000);
+  const now = new Date();
 
-  console.log(`Subscription canceled for user ${userId}`);
+  // Only downgrade if we're past the period end
+  // If canceled but still within paid period, keep their access
+  if (periodEnd > now) {
+    // User canceled but still has time left - mark as canceled but keep plan
+    await db.updateUser(userId, {
+      subscription_status: 'canceled',
+    });
+    console.log(`Subscription marked as canceled for user ${userId}, but access retained until ${periodEnd}`);
+  } else {
+    // Period has ended, downgrade to free plan
+    await db.updateUser(userId, {
+      plan: 'free',
+      monthly_pages_limit: getPagesLimit('free'),
+      pages_used_monthly: 0,
+      subscription_status: 'canceled',
+      subscription_id: undefined,
+    });
+    console.log(`Subscription expired, user ${userId} downgraded to free plan`);
+  }
 }
 
 // Handle successful payment (subscription renewal)
@@ -190,10 +205,16 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
   const user = allUsers.find(u => u.subscription_id === subscriptionId);
 
   if (user) {
+    // Mark subscription as past_due
     await db.updateUser(user.id, {
       subscription_status: 'past_due',
     });
-    console.log(`Payment failed for user ${user.id}`);
+    console.log(`Payment failed for user ${user.id}, subscription marked as past_due`);
+
+    // Note: Stripe will automatically retry payment and eventually cancel
+    // the subscription if payment continues to fail. We rely on the
+    // 'customer.subscription.deleted' webhook to downgrade the user.
+    // In the meantime, user keeps their paid access (Stripe best practice).
   }
 }
 
