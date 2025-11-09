@@ -41,11 +41,11 @@ export function getPricingTiers() {
     },
     starter: {
       name: 'Starter',
-      pages: 500,
-      price: 9.99,
+      pages: 400,
+      price: 30,
       priceId: process.env.STRIPE_STARTER_PRICE_ID || 'price_starter',
       features: [
-        '500 pages per month',
+        '400 pages per month',
         'PDF to CSV conversion',
         'PDF to XLSX conversion',
         'Priority email support',
@@ -55,11 +55,11 @@ export function getPricingTiers() {
     },
     professional: {
       name: 'Professional',
-      pages: 2000,
-      price: 29.99,
+      pages: 1000,
+      price: 60,
       priceId: process.env.STRIPE_PROFESSIONAL_PRICE_ID || 'price_professional',
       features: [
-        '2,000 pages per month',
+        '1,000 pages per month',
         'PDF to CSV conversion',
         'PDF to XLSX conversion',
         'Priority support',
@@ -71,11 +71,11 @@ export function getPricingTiers() {
     },
     enterprise: {
       name: 'Enterprise',
-      pages: 10000,
-      price: 99.99,
+      pages: 4000,
+      price: 99,
       priceId: process.env.STRIPE_ENTERPRISE_PRICE_ID || 'price_enterprise',
       features: [
-        '10,000 pages per month',
+        '4,000 pages per month',
         'Everything in Professional',
         'Dedicated support',
         'Custom integrations',
