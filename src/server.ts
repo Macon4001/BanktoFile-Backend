@@ -9,6 +9,7 @@ import stripeRoutes from "./routes/stripe.js";
 import webhookRoutes from "./routes/webhooks.js";
 import authRoutes from "./routes/auth.js";
 import blogRoutes from "./routes/blog.js";
+import contactRoutes from "./routes/contact.js";
 import { ocrService } from "./services/ocrService.js";
 
 const app: Express = express();
@@ -44,6 +45,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api", uploadRoutes);
 app.use("/api/stripe", stripeRoutes);
 app.use("/api/blog", blogRoutes);
+app.use("/api/contact", contactRoutes);
 
 // Error handling middleware
 app.use((err: Error, _req: Request, res: Response, _next: unknown) => {
