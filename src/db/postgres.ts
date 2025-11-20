@@ -41,6 +41,43 @@ export interface ConversionLog {
   timestamp: Date;
 }
 
+export interface BlogPost {
+  id: string;
+  title: string;
+  slug: string;
+  excerpt?: string;
+  content: string;
+  category?: string;
+  read_time?: string;
+  author_id?: string;
+  featured_image_url?: string;
+  published: boolean;
+  published_at?: Date;
+  meta_description?: string;
+  meta_keywords?: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface BlogImage {
+  id: string;
+  blog_post_id: string;
+  url: string;
+  alt_text?: string;
+  file_name?: string;
+  file_size_bytes?: number;
+  mime_type?: string;
+  created_at: Date;
+}
+
+export interface NewsletterSubscriber {
+  id: string;
+  email: string;
+  active: boolean;
+  subscribed_at: Date;
+  unsubscribed_at?: Date;
+}
+
 // Create connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -410,6 +447,219 @@ class PostgresStore {
   // Close pool (for graceful shutdown)
   async close(): Promise<void> {
     await pool.end();
+  }
+
+  // ============ Blog Post Methods ============
+
+  // Get all published blog posts (with optional pagination)
+  async getPublishedBlogPosts(limit?: number, offset?: number): Promise<BlogPost[]> {
+    const client = await pool.connect();
+    try {
+      const query = `
+        SELECT * FROM blog_posts
+        WHERE published = true
+        ORDER BY published_at DESC
+        ${limit ? `LIMIT ${limit}` : ''}
+        ${offset ? `OFFSET ${offset}` : ''}
+      `;
+      const result = await client.query<BlogPost>(query);
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get blog post by slug
+  async getBlogPostBySlug(slug: string): Promise<BlogPost | undefined> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<BlogPost>(
+        'SELECT * FROM blog_posts WHERE slug = $1 AND published = true',
+        [slug]
+      );
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get blog post by ID (for admin)
+  async getBlogPostById(id: string): Promise<BlogPost | undefined> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<BlogPost>(
+        'SELECT * FROM blog_posts WHERE id = $1',
+        [id]
+      );
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  // Create a new blog post
+  async createBlogPost(post: Omit<BlogPost, 'id' | 'created_at' | 'updated_at'>): Promise<BlogPost> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<BlogPost>(
+        `INSERT INTO blog_posts (
+          title, slug, excerpt, content, category, read_time,
+          author_id, featured_image_url, published, published_at,
+          meta_description, meta_keywords
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        RETURNING *`,
+        [
+          post.title,
+          post.slug,
+          post.excerpt || null,
+          post.content,
+          post.category || null,
+          post.read_time || null,
+          post.author_id || null,
+          post.featured_image_url || null,
+          post.published,
+          post.published_at || null,
+          post.meta_description || null,
+          post.meta_keywords || null,
+        ]
+      );
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  // Update a blog post
+  async updateBlogPost(id: string, updates: Partial<BlogPost>): Promise<BlogPost | undefined> {
+    const client = await pool.connect();
+    try {
+      const fields: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 1;
+
+      const fieldMapping: Record<string, string> = {
+        title: 'title',
+        slug: 'slug',
+        excerpt: 'excerpt',
+        content: 'content',
+        category: 'category',
+        read_time: 'read_time',
+        author_id: 'author_id',
+        featured_image_url: 'featured_image_url',
+        published: 'published',
+        published_at: 'published_at',
+        meta_description: 'meta_description',
+        meta_keywords: 'meta_keywords',
+      };
+
+      Object.entries(updates).forEach(([key, value]) => {
+        const dbField = fieldMapping[key];
+        if (dbField && value !== undefined) {
+          fields.push(`${dbField} = $${paramIndex}`);
+          values.push(value);
+          paramIndex++;
+        }
+      });
+
+      if (fields.length === 0) {
+        return this.getBlogPostById(id);
+      }
+
+      values.push(id);
+      const query = `
+        UPDATE blog_posts
+        SET ${fields.join(', ')}, updated_at = NOW()
+        WHERE id = $${paramIndex}
+        RETURNING *
+      `;
+
+      const result = await client.query<BlogPost>(query, values);
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  // Delete a blog post
+  async deleteBlogPost(id: string): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        'DELETE FROM blog_posts WHERE id = $1',
+        [id]
+      );
+      return (result.rowCount ?? 0) > 0;
+    } finally {
+      client.release();
+    }
+  }
+
+  // ============ Newsletter Methods ============
+
+  // Subscribe to newsletter
+  async subscribeToNewsletter(email: string): Promise<NewsletterSubscriber> {
+    const client = await pool.connect();
+    try {
+      // Try to reactivate if already exists
+      const existing = await client.query<NewsletterSubscriber>(
+        'SELECT * FROM newsletter_subscribers WHERE email = $1',
+        [email]
+      );
+
+      if (existing.rows[0]) {
+        // Reactivate if inactive
+        if (!existing.rows[0].active) {
+          const result = await client.query<NewsletterSubscriber>(
+            `UPDATE newsletter_subscribers
+             SET active = true, unsubscribed_at = NULL
+             WHERE email = $1
+             RETURNING *`,
+            [email]
+          );
+          return result.rows[0];
+        }
+        return existing.rows[0];
+      }
+
+      // Create new subscriber
+      const result = await client.query<NewsletterSubscriber>(
+        'INSERT INTO newsletter_subscribers (email) VALUES ($1) RETURNING *',
+        [email]
+      );
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  // Unsubscribe from newsletter
+  async unsubscribeFromNewsletter(email: string): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `UPDATE newsletter_subscribers
+         SET active = false, unsubscribed_at = NOW()
+         WHERE email = $1`,
+        [email]
+      );
+      return (result.rowCount ?? 0) > 0;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get all active newsletter subscribers
+  async getNewsletterSubscribers(): Promise<NewsletterSubscriber[]> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<NewsletterSubscriber>(
+        'SELECT * FROM newsletter_subscribers WHERE active = true ORDER BY subscribed_at DESC'
+      );
+      return result.rows;
+    } finally {
+      client.release();
+    }
   }
 }
 

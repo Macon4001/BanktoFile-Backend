@@ -180,10 +180,84 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Blog posts table
+-- Stores blog content with SEO-friendly slugs and metadata
+CREATE TABLE blog_posts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    title VARCHAR(500) NOT NULL,
+    slug VARCHAR(500) UNIQUE NOT NULL,
+    excerpt TEXT,
+    content TEXT NOT NULL,
+    category VARCHAR(100),
+    read_time VARCHAR(50), -- e.g., "5 min read"
+    author_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    featured_image_url TEXT,
+    published BOOLEAN NOT NULL DEFAULT false,
+    published_at TIMESTAMP WITH TIME ZONE,
+
+    -- SEO metadata
+    meta_description TEXT,
+    meta_keywords TEXT,
+
+    -- Timestamps
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- Create indexes for blog posts
+CREATE INDEX idx_blog_posts_slug ON blog_posts(slug);
+CREATE INDEX idx_blog_posts_published ON blog_posts(published);
+CREATE INDEX idx_blog_posts_category ON blog_posts(category);
+CREATE INDEX idx_blog_posts_published_at ON blog_posts(published_at DESC);
+CREATE INDEX idx_blog_posts_author_id ON blog_posts(author_id);
+
+-- Trigger to auto-update updated_at on blog_posts table
+CREATE TRIGGER update_blog_posts_updated_at
+    BEFORE UPDATE ON blog_posts
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+-- Blog images table
+-- Stores images associated with blog posts
+CREATE TABLE blog_images (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    blog_post_id UUID REFERENCES blog_posts(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    alt_text TEXT,
+    file_name VARCHAR(500),
+    file_size_bytes BIGINT,
+    mime_type VARCHAR(100),
+
+    -- Timestamps
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+-- Create indexes for blog images
+CREATE INDEX idx_blog_images_post_id ON blog_images(blog_post_id);
+
+-- Newsletter subscribers table
+-- Stores email addresses for newsletter subscriptions
+CREATE TABLE newsletter_subscribers (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    active BOOLEAN NOT NULL DEFAULT true,
+
+    -- Timestamps
+    subscribed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    unsubscribed_at TIMESTAMP WITH TIME ZONE
+);
+
+-- Create indexes for newsletter subscribers
+CREATE INDEX idx_newsletter_subscribers_email ON newsletter_subscribers(email);
+CREATE INDEX idx_newsletter_subscribers_active ON newsletter_subscribers(active);
+
 -- Comments on tables for documentation
 COMMENT ON TABLE users IS 'Stores user account information, authentication, and subscription data';
 COMMENT ON TABLE conversion_logs IS 'Tracks all PDF/CSV conversion activity';
 COMMENT ON TABLE subscription_history IS 'Audit log for subscription changes and Stripe webhook events';
+COMMENT ON TABLE blog_posts IS 'Stores blog posts with content, metadata, and publishing status';
+COMMENT ON TABLE blog_images IS 'Stores images associated with blog posts';
+COMMENT ON TABLE newsletter_subscribers IS 'Stores email addresses for newsletter subscriptions';
 
 COMMENT ON COLUMN users.stripe_customer_id IS 'Stripe customer ID for payment processing';
 COMMENT ON COLUMN users.subscription_id IS 'Current Stripe subscription ID';
@@ -195,3 +269,6 @@ COMMENT ON COLUMN users.pages_used_monthly IS 'Number of pages converted in curr
 COMMENT ON COLUMN users.monthly_pages_limit IS 'Monthly page limit (for paid plans)';
 COMMENT ON COLUMN users.current_period_start IS 'Start of current subscription billing period';
 COMMENT ON COLUMN users.current_period_end IS 'End of current subscription billing period';
+COMMENT ON COLUMN blog_posts.slug IS 'SEO-friendly URL slug for the blog post';
+COMMENT ON COLUMN blog_posts.published IS 'Whether the blog post is published and visible to users';
+COMMENT ON COLUMN newsletter_subscribers.active IS 'Whether the subscriber is active (not unsubscribed)';

@@ -8,6 +8,7 @@ import uploadRoutes from "./routes/upload.js";
 import stripeRoutes from "./routes/stripe.js";
 import webhookRoutes from "./routes/webhooks.js";
 import authRoutes from "./routes/auth.js";
+import blogRoutes from "./routes/blog.js";
 import { ocrService } from "./services/ocrService.js";
 
 const app: Express = express();
@@ -42,6 +43,7 @@ app.get("/health", (_req: Request, res: Response) => {
 app.use("/api/auth", authRoutes);
 app.use("/api", uploadRoutes);
 app.use("/api/stripe", stripeRoutes);
+app.use("/api/blog", blogRoutes);
 
 // Error handling middleware
 app.use((err: Error, _req: Request, res: Response, _next: unknown) => {
