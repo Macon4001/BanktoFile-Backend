@@ -78,6 +78,29 @@ export interface NewsletterSubscriber {
   unsubscribed_at?: Date;
 }
 
+export interface BankRequest {
+  id: string;
+  bank_name: string;
+  user_email: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'rejected';
+  user_id?: string | null;
+  notes?: string | null;
+  admin_notes?: string | null;
+  created_at: Date;
+  updated_at: Date;
+  completed_at?: Date | null;
+}
+
+export interface BankRequestStats {
+  bank_name: string;
+  request_count: number;
+  unique_users: number;
+  first_request_at: Date;
+  latest_request_at: Date;
+  pending_count: number;
+  completed_count: number;
+}
+
 // Create connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -657,6 +680,114 @@ class PostgresStore {
         'SELECT * FROM newsletter_subscribers WHERE active = true ORDER BY subscribed_at DESC'
       );
       return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  // ===== Bank Request Methods =====
+
+  // Create a new bank request
+  async createBankRequest(data: {
+    bankName: string;
+    userEmail: string;
+    notes?: string;
+    userId?: string | null;
+  }): Promise<string> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<BankRequest>(
+        `INSERT INTO bank_requests (bank_name, user_email, notes, user_id, status)
+         VALUES ($1, $2, $3, $4, 'pending')
+         RETURNING id`,
+        [data.bankName, data.userEmail, data.notes || null, data.userId || null]
+      );
+      return result.rows[0].id;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get all bank requests (optionally filter by status)
+  async getBankRequests(status?: string): Promise<BankRequest[]> {
+    const client = await pool.connect();
+    try {
+      let query = 'SELECT * FROM bank_requests';
+      const params: string[] = [];
+
+      if (status) {
+        query += ' WHERE status = $1';
+        params.push(status);
+      }
+
+      query += ' ORDER BY created_at DESC';
+
+      const result = await client.query<BankRequest>(query, params);
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get bank request statistics
+  async getBankRequestStats(): Promise<BankRequestStats[]> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<BankRequestStats>(
+        'SELECT * FROM bank_request_stats'
+      );
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Update bank request status
+  async updateBankRequestStatus(
+    id: string,
+    status: string,
+    adminNotes?: string
+  ): Promise<void> {
+    const client = await pool.connect();
+    try {
+      const completedAt = status === 'completed' ? 'NOW()' : 'NULL';
+
+      await client.query(
+        `UPDATE bank_requests
+         SET status = $1, admin_notes = $2, completed_at = ${completedAt}, updated_at = NOW()
+         WHERE id = $3`,
+        [status, adminNotes || null, id]
+      );
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get pending bank requests count
+  async getPendingBankRequestsCount(): Promise<number> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT COUNT(*) as count FROM bank_requests WHERE status = 'pending'`
+      );
+      return parseInt(result.rows[0].count);
+    } finally {
+      client.release();
+    }
+  }
+
+  // Check if a bank has already been requested by this email
+  async hasBankBeenRequested(bankName: string, userEmail: string): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT COUNT(*) as count
+         FROM bank_requests
+         WHERE LOWER(bank_name) = LOWER($1)
+         AND LOWER(user_email) = LOWER($2)`,
+        [bankName, userEmail]
+      );
+      return parseInt(result.rows[0].count) > 0;
     } finally {
       client.release();
     }

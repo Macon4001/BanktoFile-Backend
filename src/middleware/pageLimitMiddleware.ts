@@ -46,6 +46,14 @@ export async function countPagesMiddleware(req: Request, res: Response, next: Ne
  */
 export async function checkPageLimitMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
+    // DEVELOPMENT MODE: Skip database check if DATABASE_URL is not set
+    if (!process.env.DATABASE_URL) {
+      console.log('⚠️  Database not configured - skipping page limit checks (development mode)');
+      req.userId = 'dev-user';
+      req.pagesInFile = req.pagesInFile || 1;
+      return next();
+    }
+
     // Get user ID from request (could be from session, cookie, or header)
     const userId = req.headers['x-user-id'] as string || req.query.userId as string;
 
