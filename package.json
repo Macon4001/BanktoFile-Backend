@@ -8,7 +8,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "lint": "eslint src/**/*.ts"
+    "lint": "eslint src/**/*.ts",
+    "prepare": "husky"
   },
   "keywords": [],
   "author": "",
@@ -43,7 +44,15 @@
     "@typescript-eslint/eslint-plugin": "^8.13.0",
     "@typescript-eslint/parser": "^8.13.0",
     "eslint": "^8.57.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3"
+  },
+  "lint-staged": {
+    "*.ts": [
+      "eslint --fix",
+      "tsc --noEmit"
+    ]
   }
 }

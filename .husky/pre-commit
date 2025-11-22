@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Run lint-staged for linting and type checking
+npx lint-staged
+
+# Run build to ensure code compiles
+echo "🔨 Running build check..."
+npm run build
+
+# Check if build succeeded
+if [ $? -ne 0 ]; then
+  echo "❌ Build failed! Please fix TypeScript errors before committing."
+  exit 1
+fi
+
+echo "✅ All pre-commit checks passed!"
