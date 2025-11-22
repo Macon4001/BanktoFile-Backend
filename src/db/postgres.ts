@@ -134,7 +134,17 @@ function normalizeUser(dbUser: any): User {
   };
 }
 
-class PostgresStore {
+export class PostgresStore {
+  // Singleton instance
+  private static instance: PostgresStore;
+
+  public static getInstance(): PostgresStore {
+    if (!PostgresStore.instance) {
+      PostgresStore.instance = new PostgresStore();
+    }
+    return PostgresStore.instance;
+  }
+
   // User methods
   async createUser(email: string, additionalFields: Partial<User> = {}): Promise<User> {
     const client = await pool.connect();
