@@ -110,6 +110,12 @@ export class PDFParser {
       return this.extractMonzoTransactions(text);
     }
 
+    // Check if this is a Barclays statement
+    if (text.includes("Barclays Bank") || text.includes("BARCLAYS") || text.includes("BUKBGB22")) {
+      console.log("Detected Barclays bank statement");
+      return this.extractBarclaysTransactions(text);
+    }
+
     // Common date patterns (non-global for better matching)
     const datePatterns = [
       /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/, // MM/DD/YYYY or DD/MM/YYYY
@@ -1405,6 +1411,207 @@ export class PDFParser {
     }
 
     console.log(`Extracted ${transactions.length} Santander transactions`);
+    return transactions;
+  }
+
+  // Extract transactions from Barclays bank statements
+  private extractBarclaysTransactions(text: string): Transaction[] {
+    const transactions: Transaction[] = [];
+    const lines = text.split('\n');
+
+    console.log('Parsing Barclays statement...');
+
+    // Barclays date pattern: "DD MMM" (e.g., "18 Jun", "01 Jul")
+    const barclaysDatePattern = /^(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s+(.+)/i;
+
+    // Extract year from statement header (e.g., "18 Jun - 17 Sep 2025")
+    let statementYear = '2025'; // Default
+    const yearMatch = text.match(/(\d{1,2}\s+\w+\s+-\s+\d{1,2}\s+\w+\s+(\d{4}))/i);
+    if (yearMatch) {
+      statementYear = yearMatch[2];
+      console.log(`Found statement year: ${statementYear}`);
+    }
+
+    // Track current date for multi-line transactions
+    let currentDate = '';
+
+    // Parse line by line
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Skip empty lines and headers/footers
+      if (!line ||
+          line.includes('Barclays Bank') ||
+          line.includes('Your Barclays Bank Account statement') ||
+          line.includes('Current account statement') ||
+          line.includes('Your transactions') ||
+          line.includes('Sort Code') ||
+          line.includes('Account no.') ||
+          line.includes('SWIFTBIC') ||
+          line.includes('IBAN') ||
+          line.includes('At a glance') ||
+          line.includes('Start balance') ||
+          line.includes('Money in') && line.includes('Money out') && line.includes('End balance') ||
+          line.includes('Date Description Money') ||
+          line.includes('NOTICEBOARD') ||
+          line.includes('Financial Services') ||
+          line.includes('Registered in England') ||
+          line.includes('Statement date') ||
+          line.includes('Last statement') ||
+          line.includes('Continued') ||
+          line.includes('Page ') ||
+          line.includes('Anything Wrong') ||
+          line.includes('Credit interest rates') ||
+          line.match(/^Giro\s+Bank Giro/) ||
+          line.match(/^ATM\s+Cash machine/) ||
+          line.match(/^Contactless/) ||
+          line.match(/^Debit Card/) ||
+          line.match(/^Direct Debit/) ||
+          line.match(/^Online$/)) {
+        continue;
+      }
+
+      // Handle "Start balance" specially
+      if (line.includes('Start balance')) {
+        const balanceMatch = line.match(/Start balance\s+([\d,]+\.?\d{0,2})/);
+        if (balanceMatch) {
+          const balance = parseFloat(balanceMatch[1].replace(/,/g, ''));
+          // We could add this as a transaction, but typically opening balance is just informational
+          console.log(`Opening Balance: £${balance}`);
+        }
+        continue;
+      }
+
+      // Handle "End balance" specially
+      if (line.includes('End balance')) {
+        const balanceMatch = line.match(/End balance\s+([\d,]+\.?\d{0,2})/);
+        if (balanceMatch) {
+          const balance = parseFloat(balanceMatch[1].replace(/,/g, ''));
+          console.log(`Closing Balance: £${balance}`);
+        }
+        continue;
+      }
+
+      // Check if this line starts with a date
+      const dateMatch = line.match(barclaysDatePattern);
+
+      if (dateMatch) {
+        // This line has a date - it's a transaction
+        const dateWithoutYear = dateMatch[1];
+        currentDate = `${dateWithoutYear} ${statementYear}`;
+        let restOfLine = dateMatch[2].trim();
+
+        console.log(`Found dated transaction: ${currentDate} - ${restOfLine.substring(0, 60)}...`);
+
+        // Collect continuation lines (multi-line descriptions with "Ref:" etc.)
+        let j = i + 1;
+        let fullText = restOfLine;
+
+        while (j < lines.length) {
+          const nextLine = lines[j].trim();
+
+          // Stop if we hit another date or footer/header
+          if (!nextLine ||
+              nextLine.match(barclaysDatePattern) ||
+              nextLine.includes('Barclays Bank') ||
+              nextLine.includes('Continued') ||
+              nextLine.includes('Page ') ||
+              nextLine.includes('Sort code')) {
+            break;
+          }
+
+          // Add continuation line
+          fullText += ' ' + nextLine;
+          j++;
+        }
+
+        // Barclays format: "DD MMM Description MoneyOut MoneyIn Balance"
+        // Example: "18 Jun Direct Debit to Paypal Payment Ref: 5N722223GM47E 31.04 45.95"
+
+        // Extract all numbers (amounts and balance)
+        const numbers = fullText.match(/\b\d{1,3}(?:,\d{3})*(?:\.\d{2})\b/g);
+
+        if (numbers && numbers.length >= 1) {
+          const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
+
+          // Find where the first number appears
+          const firstNumberIndex = fullText.indexOf(numbers[0]);
+          let description = fullText.substring(0, firstNumberIndex).trim();
+
+          // Determine transaction type based on number count
+          let moneyOut = 0;
+          let moneyIn = 0;
+          let balance = 0;
+          let amount = 0;
+          let type: 'credit' | 'debit' = 'debit';
+
+          if (amounts.length === 1) {
+            // Only balance (no transaction amount) - skip this line
+            continue;
+          } else if (amounts.length === 2) {
+            // Either MoneyOut+Balance or MoneyIn+Balance
+            amount = amounts[0];
+            balance = amounts[1];
+
+            // Check description for hints about type
+            const lower = description.toLowerCase();
+            if (lower.includes('received from') ||
+                lower.includes('transfer from') ||
+                lower.includes('giro received')) {
+              moneyIn = amount;
+              type = 'credit';
+            } else {
+              moneyOut = amount;
+              type = 'debit';
+            }
+          } else if (amounts.length >= 3) {
+            // Three or more amounts - MoneyOut, MoneyIn, Balance
+            moneyOut = amounts[0];
+            moneyIn = amounts[1];
+            balance = amounts[2];
+
+            if (moneyIn > 0 && moneyOut === 0) {
+              amount = moneyIn;
+              type = 'credit';
+            } else if (moneyOut > 0 && moneyIn === 0) {
+              amount = moneyOut;
+              type = 'debit';
+            } else if (moneyIn > 0) {
+              amount = moneyIn;
+              type = 'credit';
+            } else if (moneyOut > 0) {
+              amount = moneyOut;
+              type = 'debit';
+            }
+          }
+
+          // Clean description - remove transaction type codes and extra spaces
+          description = description
+            .replace(/\s+/g, ' ')
+            .replace(/^(DD|ATM|Giro)\s+/i, '') // Remove icon labels
+            .trim();
+
+          if (amount > 0 && description) {
+            transactions.push({
+              date: currentDate,
+              description: description,
+              amount: amount,
+              balance: balance > 0 ? balance : undefined,
+              type: type,
+            });
+
+            if (transactions.length <= 5) {
+              console.log(`✓ ${currentDate} | ${description.substring(0, 40)} | ${type} £${amount} | Bal: £${balance}`);
+            }
+          }
+        }
+
+        // Skip to the line after this transaction
+        i = j - 1;
+      }
+    }
+
+    console.log(`Extracted ${transactions.length} Barclays transactions`);
     return transactions;
   }
 
