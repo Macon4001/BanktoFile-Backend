@@ -1,10 +1,11 @@
-import pdfParse from "pdf-parse";
+import * as pdfParse from "pdf-parse";
 import { Transaction, ParsedStatement } from "../types/index.js";
 
 export class PDFParser {
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean }> {
     try {
-      const data = await pdfParse(buffer);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data = await (pdfParse as any).default(buffer);
       const text = data.text;
 
       console.log("PDF Text extracted (first 1000 chars):", text.substring(0, 1000)); // Debug log
@@ -118,8 +119,8 @@ export class PDFParser {
 
     // Common date patterns (non-global for better matching)
     const datePatterns = [
-      /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/, // MM/DD/YYYY or DD/MM/YYYY
-      /\b(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})\b/, // YYYY-MM-DD
+      /\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/, // MM/DD/YYYY or DD/MM/YYYY
+      /\b(\d{4}[/-]\d{1,2}[/-]\d{1,2})\b/, // YYYY-MM-DD
       /\b(\w{3}\s+\d{1,2},?\s+\d{4})\b/i, // Jan 15, 2024
       /\b(\d{2}\/\d{2}\/\d{4})\b/, // DD/MM/YYYY strict
       /\b(\d{1,2}-\w{3}-\d{2,4})\b/i, // 15-Jan-2024
@@ -299,7 +300,7 @@ export class PDFParser {
       }
 
       // Look for dates in format like "01 Aug 25" or "01/08/2025"
-      const dateMatch = line.match(/\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2,4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/i);
+      const dateMatch = line.match(/\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2,4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/i);
       if (!dateMatch) continue;
 
       // Get the rest of the line after the date
@@ -414,10 +415,6 @@ export class PDFParser {
     while (i < lines.length - 5) {
       const line1 = lines[i].trim().toLowerCase();
       const line2 = lines[i + 1]?.trim() || '';
-      const line3 = lines[i + 2]?.trim().toLowerCase() || '';
-      const line4 = lines[i + 3]?.trim() || '';
-      const line5 = lines[i + 4]?.trim().toLowerCase() || '';
-      const line6 = lines[i + 5]?.trim() || '';
 
       // Check if this looks like a transaction start
       if (line1 === 'date' || line1 === 'date.') {
@@ -606,8 +603,7 @@ export class PDFParser {
           const type = isDebit ? 'debit' : 'credit';
 
           // Extract description (everything between date and the last two numbers)
-          // Find where the last two numbers start in the string
-          const lastTwoNumbers = amountStr + balanceStr;
+          // Find where the amount starts in the string
           const amountIndex = restOfLine.lastIndexOf(amountStr);
 
           let description = restOfLine.substring(0, amountIndex).trim();
@@ -728,7 +724,7 @@ export class PDFParser {
         console.log(`Found dated transaction: ${currentDate} - ${line.substring(0, 60)}...`);
         const dateWithoutYear = dateMatch[1];
         const fullDate = `${dateWithoutYear} ${statementYear}`;
-        let description = dateMatch[2].trim();
+        const description = dateMatch[2].trim();
 
         // Collect continuation lines for this transaction
         let j = i + 1;
@@ -1038,7 +1034,7 @@ export class PDFParser {
         // This line has a date - it's a transaction
         const dateWithoutYear = dateMatch[1];
         currentDate = `${dateWithoutYear} ${statementYear}`;
-        let description = dateMatch[2].trim();
+        const description = dateMatch[2].trim();
 
         console.log(`Found dated transaction: ${currentDate} - ${line.substring(0, 60)}...`);
 
@@ -1254,7 +1250,7 @@ export class PDFParser {
         // Normalize the date by removing ordinal suffixes
         const normalizedDate = dateWithoutYear.replace(/(\d+)(?:st|nd|rd|th)/, '$1');
         currentDate = `${normalizedDate} ${statementYear}`;
-        let description = dateMatch[2].trim();
+        const description = dateMatch[2].trim();
 
         console.log(`Found dated transaction: ${currentDate} - ${description.substring(0, 60)}...`);
 
@@ -1415,13 +1411,13 @@ export class PDFParser {
   }
 
   // Extract transactions from Barclays bank statements
-  // Each description line = separate transaction (even if same date)
-  // Format: "DD MMM Description\nRef line\nAmount(s)"
+  // NEW APPROACH: Handle multiple transactions per date properly
+  // Format: Each date block contains N transactions, each with description + amounts
   private extractBarclaysTransactions(text: string): Transaction[] {
     const transactions: Transaction[] = [];
     const lines = text.split('\n');
 
-    console.log('Parsing Barclays statement...');
+    console.log('Parsing Barclays statement (NEW PARSER)...');
 
     // Extract year
     let statementYear = '2025';
@@ -1431,6 +1427,7 @@ export class PDFParser {
       console.log(`Found statement year: ${statementYear}`);
     }
 
+    // Helper: Extract amounts from text
     const extractAmounts = (text: string): number[] => {
       const regex = /\d{1,3}(?:,\d{3})*\.\d{2}/g;
       const matches = text.match(regex);
@@ -1448,10 +1445,8 @@ export class PDFParser {
       }
     }
 
-    // Match: "DD MMM" + text (transaction start)
-    const datePattern = /^(\d{1,2})\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)([A-Z].*)/i;
-
-    // Match: standalone "DD MMM" or "DD MMM Description" lines on page headers
+    // Date patterns
+    const datePattern = /^(\d{1,2})\s*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*([A-Z].*)/i;
     const dateOnlyPattern = /^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*$/i;
 
     let currentDate = '';
@@ -1460,9 +1455,21 @@ export class PDFParser {
     while (i < lines.length) {
       const line = lines[i].trim();
 
+      // Debug: show all lines that might be the 25 Jun transaction
+      if (line.includes('25 Jun') || line.includes('25Jun')) {
+        console.log(`\n📍 Line ${i} contains '25 Jun': "${line}"`);
+        console.log(`   Matches datePattern? ${datePattern.test(line)}`);
+        console.log(`   Matches dateOnlyPattern? ${dateOnlyPattern.test(line)}`);
+      }
+
       // Skip noise and informational sections
+      // IMPORTANT: Don't skip lines that are transactions mentioning sort codes!
+      // Only skip if it's a header line (e.g., "Sort code 20-05-74 • Account number 53539997")
+      const isAccountInfoHeader = /•.*Sort code.*Account number/i.test(line) ||
+                                  (/Sort code.*Account number/i.test(line) && !datePattern.test(line));
+
       if (!line ||
-          /Sort code|Account number|20-05-74|53539997/i.test(line) ||
+          isAccountInfoHeader ||
           /Barclays Bank|Authorised by|Registered in England/i.test(line) ||
           /Financial Services|Page \d+|Continued/i.test(line) ||
           /Bank Giro.*Cash machine|SWIFTBIC|IBAN/i.test(line) ||
@@ -1489,6 +1496,21 @@ export class PDFParser {
         const month = dateMatch[2];
         const restOfLine = dateMatch[3];
         currentDate = `${day} ${month} ${statementYear}`;
+
+        // Debug 25 Jun and transfers
+        if ((day === '25' && month === 'Jun') || restOfLine.toLowerCase().includes('transfer')) {
+          console.log(`\n🔍 DEBUG DATE MATCH at line ${i}: ${day} ${month}`);
+          console.log(`   Full line: "${line}"`);
+          console.log(`   restOfLine: "${restOfLine}"`);
+
+          // Check if it would be skipped
+          const wouldSkip = /Start balance|End balance/i.test(restOfLine) ||
+                           /^Money (in|out) Balance/i.test(restOfLine) ||
+                           /^Money out\s*Money in/i.test(restOfLine) ||
+                           /^Balance$/i.test(restOfLine) ||
+                           /^Description$/i.test(restOfLine);
+          console.log(`   Would be skipped? ${wouldSkip}`);
+        }
 
         // Debug 17 Sep
         if (day === '17' && month === 'Sep') {
@@ -1527,6 +1549,7 @@ export class PDFParser {
 
         // Look at next line(s) for continuation (Ref, amounts)
         let j = i + 1;
+        let fullTextWithAmounts = restOfLine; // Track the full text including amount lines
         while (j < lines.length && j < i + 8) {
           const nextLine = lines[j].trim();
 
@@ -1554,6 +1577,7 @@ export class PDFParser {
           const nextAmounts = extractAmounts(nextLine);
           if (nextAmounts.length > 0) {
             amounts = amounts.concat(nextAmounts);
+            fullTextWithAmounts += ' ' + nextLine; // Keep the full line with amounts
             // Get description before amounts (but skip column headers)
             const firstAmountMatch = nextLine.match(/\d{1,3}(?:,\d{3})*\.\d{2}/);
             if (firstAmountMatch) {
@@ -1568,6 +1592,7 @@ export class PDFParser {
             break;
           } else {
             // Line is continuation of description (like "Ref: xxx")
+            fullTextWithAmounts += ' ' + nextLine;
             // Skip column header text and standalone "Money in"/"Money out" labels
             if (!/^(Money (in|out)( Balance)?|Balance|Description)$/i.test(nextLine)) {
               description += ' ' + nextLine;
@@ -1585,32 +1610,85 @@ export class PDFParser {
           let type: 'credit' | 'debit' = 'debit';
 
           const lower = description.toLowerCase();
-          const isCredit = lower.includes('received') || lower.includes('transfer from') ||
-                           lower.includes('giro') || lower.includes('credit');
+          // Enhanced credit detection with more keywords
+          const isCredit = lower.includes('received from') ||
+                           lower.includes('received') ||
+                           lower.includes('transfer from') ||
+                           lower.includes('giro credit') ||
+                           lower.includes('credit transfer') ||
+                           lower.includes('bank giro') ||
+                           lower.includes('faster payment') && lower.includes('from') ||
+                           /received\s+(from|£)/i.test(description) ||
+                           /transfer\s+from/i.test(description);
+
+          // Debug logging for problematic transactions
+          if (currentDate.includes('25 Jun') || lower.includes('account 80131024') || lower.includes('transfer') || lower.includes('rashid')) {
+            console.log(`\n🔍 DEBUG Transaction: ${currentDate}`);
+            console.log(`   Description: "${description}"`);
+            console.log(`   Full text with amounts: "${fullTextWithAmounts}"`);
+            console.log(`   Lower: "${lower}"`);
+            console.log(`   Amounts: [${amounts.join(', ')}]`);
+            console.log(`   isCredit check: ${isCredit}`);
+          }
 
           if (amounts.length === 1) {
             amount = amounts[0];
             balance = amounts[0];
             type = isCredit ? 'credit' : 'debit';
           } else if (amounts.length === 2) {
+            // Two amounts in Barclays format could be:
+            // 1. [MoneyOut, Balance] - debit transaction (Money In column is blank)
+            // 2. [MoneyIn, Balance] - credit transaction (Money Out column is blank)
+            //
+            // Strategy: Use description keywords to determine which column
             amount = amounts[0];
             balance = amounts[1];
+
+            // For Barclays, use enhanced detection
             type = isCredit ? 'credit' : 'debit';
+
+            // Additional check: if balance decreased, it's likely a debit; if increased, likely credit
+            // But only use this as a fallback if keywords are ambiguous
+            if (!isCredit) {
+              // Check if description has any debit keywords
+              const isDefinitelyDebit = lower.includes('payment to') ||
+                                       lower.includes('card payment') ||
+                                       lower.includes('card purchase') ||
+                                       lower.includes('direct debit') ||
+                                       lower.includes('bill payment');
+              if (!isDefinitelyDebit) {
+                // No clear debit keywords, might be a credit that we missed
+                // Keep as debit for now but log it
+                console.log(`⚠️  Ambiguous 2-amount transaction: "${description}" - defaulting to debit`);
+              }
+            }
           } else if (amounts.length >= 3) {
             // Format: moneyOut, moneyIn, balance
             const moneyOut = amounts[amounts.length - 3];
             const moneyIn = amounts[amounts.length - 2];
             balance = amounts[amounts.length - 1];
 
-            if (moneyIn > 0 && moneyIn > moneyOut) {
+            if (moneyIn > 0 && moneyOut === 0) {
+              // Only money in - it's a credit
               amount = moneyIn;
               type = 'credit';
-            } else if (moneyOut > 0) {
+            } else if (moneyOut > 0 && moneyIn === 0) {
+              // Only money out - it's a debit
               amount = moneyOut;
               type = 'debit';
+            } else if (moneyIn > 0 && moneyOut > 0) {
+              // Both present - shouldn't happen, but use description as tiebreaker
+              if (isCredit) {
+                amount = moneyIn;
+                type = 'credit';
+              } else {
+                amount = moneyOut;
+                type = 'debit';
+              }
             } else {
-              amount = moneyIn;
-              type = 'credit';
+              // Fallback - use non-zero amount
+              amount = moneyIn > 0 ? moneyIn : moneyOut;
+              type = moneyIn > 0 ? 'credit' : 'debit';
             }
           }
 
@@ -1656,21 +1734,111 @@ export class PDFParser {
             console.log(`\n🔍 DEBUG Description line for ${currentDate}: "${line}"`);
           }
 
-          // Might be a description line - collect it
+          // EDGE CASE: Check if this is a multi-transaction block with amounts at the end
+          // Collect ALL transaction descriptions first, then ALL amounts
+          const transactionDescriptions: string[] = [];
+          const allAmountsInBlock: number[] = [];
+          let currentDesc = line;
+          let j = i + 1;
+          let collectingDescriptions = true;
+
+          while (j < lines.length && j < i + 20) {
+            const nextLine = lines[j].trim();
+
+            if (datePattern.test(nextLine) || dateOnlyPattern.test(nextLine)) break;
+            if (/How it works|Dispute Resolution|compensation arrangements|Anything Wrong/i.test(nextLine)) break;
+            if (!nextLine ||
+                /^Sort code.*Account number/i.test(nextLine) ||  // Only skip header lines with both
+                /Barclays Bank|Authorised by|Registered in England/i.test(nextLine) ||
+                /Financial Services|Page \d+|Continued/i.test(nextLine) ||
+                /Bank Giro.*Cash machine|SWIFTBIC|IBAN/i.test(nextLine) ||
+                /^Money out\s+Money in\s+Balance/i.test(nextLine) ||
+                /^Date\s*Description/i.test(nextLine)) {
+              j++;
+              continue;
+            }
+
+            // Check if this line starts a NEW transaction
+            const startsNewTransaction = /^(Bill Payment to|Card Payment to|Card Purchase|Direct Debit to|Transfer From|Transfer to|Received From|Cash Machine|Standing Order)/i.test(nextLine);
+
+            const nextAmounts = extractAmounts(nextLine);
+
+            if (startsNewTransaction) {
+              // Save previous description if we have one
+              if (currentDesc.trim()) {
+                transactionDescriptions.push(currentDesc.trim());
+              }
+              currentDesc = nextLine;
+              collectingDescriptions = true; // Reset for new transaction
+            } else if (nextAmounts.length > 0) {
+              // Found amounts - save current description if collecting
+              if (currentDesc.trim() && collectingDescriptions) {
+                transactionDescriptions.push(currentDesc.trim());
+                currentDesc = '';
+              }
+              // Collect all amounts (don't stop description collection yet - there might be more transactions)
+              allAmountsInBlock.push(...nextAmounts);
+            } else if (collectingDescriptions) {
+              // Continuation of description
+              if (!/^(Money (in|out)( Balance)?|Balance|Description)$/i.test(nextLine)) {
+                currentDesc += ' ' + nextLine;
+              }
+            }
+
+            j++;
+          }
+
+          // Save any remaining description that wasn't saved yet
+          if (currentDesc.trim() && !transactionDescriptions.includes(currentDesc.trim())) {
+            transactionDescriptions.push(currentDesc.trim());
+          }
+
+          // If we collected multiple descriptions and multiple amounts, match them up
+          if (transactionDescriptions.length >= 2 && allAmountsInBlock.length >= 2) {
+            console.log(`\n🔥 EDGE CASE: ${currentDate} - ${transactionDescriptions.length} descriptions, ${allAmountsInBlock.length} amounts`);
+
+            // Create a transaction for each description+amount pair
+            const numTransactions = Math.min(transactionDescriptions.length, allAmountsInBlock.length - 1); // Last amount is usually balance
+            const finalBalance = allAmountsInBlock[allAmountsInBlock.length - 1];
+
+            for (let k = 0; k < numTransactions; k++) {
+              const desc = transactionDescriptions[k];
+              const amount = allAmountsInBlock[k];
+              const balance = (k === numTransactions - 1) ? finalBalance : 0;
+
+              const lower = desc.toLowerCase();
+              const isCredit = lower.includes('received from') ||
+                               lower.includes('received ') ||
+                               lower.includes('transfer from') ||
+                               /received\s+from/i.test(desc);
+              const type: 'credit' | 'debit' = isCredit ? 'credit' : 'debit';
+
+              if (amount > 0 && desc.length >= 10) {
+                transactions.push({
+                  date: currentDate,
+                  description: desc,
+                  amount: amount,
+                  balance: balance,
+                  type: type,
+                });
+                console.log(`✓ ${currentDate} | ${desc.substring(0, 50)} | ${type} £${amount.toFixed(2)} | Bal: £${balance.toFixed(2)}`);
+              }
+            }
+
+            i = j;
+            continue;
+          }
+
+          // FALLBACK: Original single-transaction logic
           let description = line;
           let amounts: number[] = [];
+          j = i + 1;
 
-          let j = i + 1;
           while (j < lines.length && j < i + 8) {
             const nextLine = lines[j].trim();
 
             if (datePattern.test(nextLine) || dateOnlyPattern.test(nextLine)) break;
-
-            // Stop if we hit informational sections
-            if (/How it works|Dispute Resolution|compensation arrangements|Anything Wrong/i.test(nextLine)) {
-              break;
-            }
-
+            if (/How it works|Dispute Resolution|compensation arrangements|Anything Wrong/i.test(nextLine)) break;
             if (!nextLine ||
                 /Sort code|Account number|20-05-74|53539997/i.test(nextLine) ||
                 /Barclays Bank|Authorised by|Registered in England/i.test(nextLine) ||
@@ -1682,6 +1850,11 @@ export class PDFParser {
               continue;
             }
 
+            const startsNewTransaction = /^(Bill Payment to|Card Payment to|Card Purchase|Direct Debit to|Transfer From|Transfer to|Received From|Cash Machine|Standing Order)/i.test(nextLine);
+            if (startsNewTransaction) {
+              break;
+            }
+
             const nextAmounts = extractAmounts(nextLine);
             if (nextAmounts.length > 0) {
               amounts = nextAmounts;
@@ -1689,15 +1862,12 @@ export class PDFParser {
               if (firstAmountMatch) {
                 const idx = nextLine.indexOf(firstAmountMatch[0]);
                 const desc = nextLine.substring(0, idx).trim();
-                // Only add if it's not a column header
                 if (desc && desc.length > 2 && !/^(Money (in|out)( Balance)?|Balance)$/i.test(desc)) {
                   description += ' ' + desc;
                 }
               }
               break;
             } else {
-              // Line is continuation of description
-              // Skip column header text and standalone "Money in"/"Money out" labels
               if (!/^(Money (in|out)( Balance)?|Balance|Description)$/i.test(nextLine)) {
                 description += ' ' + nextLine;
               }
@@ -1713,31 +1883,67 @@ export class PDFParser {
             let type: 'credit' | 'debit' = 'debit';
 
             const lower = description.toLowerCase();
-            const isCredit = lower.includes('received') || lower.includes('transfer from') ||
-                             lower.includes('giro') || lower.includes('credit');
+            // Enhanced credit detection with more keywords
+            const isCredit = lower.includes('received from') ||
+                             lower.includes('received') ||
+                             lower.includes('transfer from') ||
+                             lower.includes('giro credit') ||
+                             lower.includes('credit transfer') ||
+                             lower.includes('bank giro') ||
+                             lower.includes('faster payment') && lower.includes('from') ||
+                             /received\s+(from|£)/i.test(description) ||
+                             /transfer\s+from/i.test(description);
+
+            // Debug logging for problematic transactions
+            if (currentDate.includes('25 Jun') || lower.includes('account 80131024') || lower.includes('transfer')) {
+              console.log(`\n🔍 DEBUG Transaction (no-date path): ${currentDate}`);
+              console.log(`   Description: "${description}"`);
+              console.log(`   Lower: "${lower}"`);
+              console.log(`   Amounts: [${amounts.join(', ')}]`);
+              console.log(`   isCredit check: ${isCredit}`);
+              console.log(`   Contains 'transfer from': ${lower.includes('transfer from')}`);
+              console.log(`   Regex test: ${/transfer\s+from/i.test(description)}`);
+            }
 
             if (amounts.length === 1) {
               amount = amounts[0];
               balance = amounts[0];
               type = isCredit ? 'credit' : 'debit';
             } else if (amounts.length === 2) {
+              // Two amounts could be:
+              // 1. MoneyOut + Balance (debit transaction)
+              // 2. MoneyIn + Balance (credit transaction)
+              // Use description keywords to determine which
               amount = amounts[0];
               balance = amounts[1];
               type = isCredit ? 'credit' : 'debit';
             } else if (amounts.length >= 3) {
+              // Format: moneyOut, moneyIn, balance
               const moneyOut = amounts[amounts.length - 3];
               const moneyIn = amounts[amounts.length - 2];
               balance = amounts[amounts.length - 1];
 
-              if (moneyIn > 0 && moneyIn > moneyOut) {
+              if (moneyIn > 0 && moneyOut === 0) {
+                // Only money in - it's a credit
                 amount = moneyIn;
                 type = 'credit';
-              } else if (moneyOut > 0) {
+              } else if (moneyOut > 0 && moneyIn === 0) {
+                // Only money out - it's a debit
                 amount = moneyOut;
                 type = 'debit';
+              } else if (moneyIn > 0 && moneyOut > 0) {
+                // Both present - shouldn't happen, but use description as tiebreaker
+                if (isCredit) {
+                  amount = moneyIn;
+                  type = 'credit';
+                } else {
+                  amount = moneyOut;
+                  type = 'debit';
+                }
               } else {
-                amount = moneyIn;
-                type = 'credit';
+                // Fallback - use non-zero amount
+                amount = moneyIn > 0 ? moneyIn : moneyOut;
+                type = moneyIn > 0 ? 'credit' : 'debit';
               }
             }
 
@@ -1789,7 +1995,7 @@ export class PDFParser {
     }
 
     // Try to extract statement period
-    const periodPattern = /(?:statement\s+period|period)\s*:?\s*([\w\s,\-\/]+)/gi;
+    const periodPattern = /(?:statement\s+period|period)\s*:?\s*([\w\s,\-/]+)/gi;
     const periodMatch = text.match(periodPattern);
     if (periodMatch) {
       metadata.statementPeriod = periodMatch[0].split(":")[1]?.trim();
