@@ -8,16 +8,22 @@ export class CSVGenerator {
     }
 
     // Define CSV columns
-    const columns = ["Date", "Description", "Type", "Amount", "Balance"];
+    const columns = ["Date", "Description", "Type", "Money In", "Money Out", "Balance"];
 
     // Convert transactions to rows
-    const records = transactions.map((transaction) => ({
-      Date: transaction.date,
-      Description: transaction.description,
-      Type: transaction.type || "N/A",
-      Amount: transaction.amount.toFixed(2),
-      Balance: transaction.balance ? transaction.balance.toFixed(2) : "N/A",
-    }));
+    const records = transactions.map((transaction) => {
+      const isCredit = transaction.type?.toLowerCase() === 'credit';
+      const isDebit = transaction.type?.toLowerCase() === 'debit';
+
+      return {
+        Date: transaction.date,
+        Description: transaction.description,
+        Type: transaction.type || "N/A",
+        "Money In": isCredit ? transaction.amount.toFixed(2) : "",
+        "Money Out": isDebit ? transaction.amount.toFixed(2) : "",
+        Balance: transaction.balance ? transaction.balance.toFixed(2) : "N/A",
+      };
+    });
 
     // Generate CSV string
     const csv = stringify(records, {

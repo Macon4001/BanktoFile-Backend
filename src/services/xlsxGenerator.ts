@@ -9,14 +9,20 @@ export class XLSXGenerator {
 
     // Convert transactions to worksheet data
     const worksheetData = [
-      ["Date", "Description", "Type", "Amount", "Balance"], // Header row
-      ...transactions.map((transaction) => [
-        transaction.date,
-        transaction.description,
-        transaction.type || "N/A",
-        transaction.amount.toFixed(2),
-        transaction.balance ? transaction.balance.toFixed(2) : "N/A",
-      ]),
+      ["Date", "Description", "Type", "Money In", "Money Out", "Balance"], // Header row
+      ...transactions.map((transaction) => {
+        const isCredit = transaction.type?.toLowerCase() === 'credit';
+        const isDebit = transaction.type?.toLowerCase() === 'debit';
+
+        return [
+          transaction.date,
+          transaction.description,
+          transaction.type || "N/A",
+          isCredit ? transaction.amount.toFixed(2) : "",
+          isDebit ? transaction.amount.toFixed(2) : "",
+          transaction.balance ? transaction.balance.toFixed(2) : "N/A",
+        ];
+      }),
     ];
 
     // Create worksheet
@@ -26,8 +32,9 @@ export class XLSXGenerator {
     worksheet["!cols"] = [
       { wch: 12 }, // Date
       { wch: 50 }, // Description
-      { wch: 10 }, // Type
-      { wch: 12 }, // Amount
+      { wch: 15 }, // Type
+      { wch: 12 }, // Money In
+      { wch: 12 }, // Money Out
       { wch: 12 }, // Balance
     ];
 
