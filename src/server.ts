@@ -11,6 +11,7 @@ import authRoutes from "./routes/auth.js";
 import blogRoutes from "./routes/blog.js";
 import contactRoutes from "./routes/contact.js";
 import bankRequestRoutes from "./routes/bankRequest.js";
+import sitemapRoutes from "./routes/sitemap.js";
 import { ocrService } from "./services/ocrService.js";
 
 const app: Express = express();
@@ -48,6 +49,9 @@ app.use("/api/stripe", stripeRoutes);
 app.use("/api/blog", blogRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/bank-request", bankRequestRoutes);
+
+// Sitemap and SEO routes
+app.use("/", sitemapRoutes);
 
 // Error handling middleware
 app.use((err: Error, _req: Request, res: Response, _next: unknown) => {

@@ -1,4 +1,4 @@
-import { Pool, QueryResult } from 'pg';
+import { Pool } from 'pg';
 
 // Database interfaces matching the schema
 export interface User {
@@ -47,11 +47,19 @@ export interface BlogPost {
   slug: string;
   excerpt?: string;
   content: string;
-  category?: string;
+  category?: 'guides' | 'banks' | 'tips' | string;
+  tags?: string[];
   read_time?: string;
+  author?: string;
   author_id?: string;
   featured_image_url?: string;
-  published: boolean;
+  featured_image_alt?: string;
+  featured_image_data?: Buffer; // Binary image data stored in PostgreSQL
+  featured_image_filename?: string;
+  featured_image_mimetype?: string;
+  featured_image_size?: number;
+  status: 'draft' | 'published';
+  published: boolean; // Kept for backwards compatibility
   published_at?: Date;
   meta_description?: string;
   meta_keywords?: string;
@@ -121,7 +129,7 @@ pool.on('error', (err) => {
 });
 
 // Helper function to normalize user object for backwards compatibility
-function normalizeUser(dbUser: any): User {
+function normalizeUser(dbUser: User): User {
   return {
     ...dbUser,
     // Map snake_case DB fields to camelCase for backwards compatibility
@@ -254,7 +262,7 @@ export class PostgresStore {
     try {
       // Build dynamic update query
       const fields: string[] = [];
-      const values: any[] = [];
+      const values: unknown[] = [];
       let paramIndex = 1;
 
       // Map camelCase to snake_case
@@ -484,6 +492,25 @@ export class PostgresStore {
 
   // ============ Blog Post Methods ============
 
+  // Get all blog posts including drafts (admin only)
+  async getAllBlogPosts(limit?: number, offset?: number, status?: string): Promise<BlogPost[]> {
+    const client = await pool.connect();
+    try {
+      const query = `
+        SELECT * FROM blog_posts
+        ${status ? 'WHERE status = $1' : ''}
+        ORDER BY created_at DESC
+        ${limit ? `LIMIT ${limit}` : ''}
+        ${offset ? `OFFSET ${offset}` : ''}
+      `;
+      const params = status ? [status] : [];
+      const result = await client.query<BlogPost>(query, params);
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
   // Get all published blog posts (with optional pagination)
   async getPublishedBlogPosts(limit?: number, offset?: number): Promise<BlogPost[]> {
     const client = await pool.connect();
@@ -536,11 +563,12 @@ export class PostgresStore {
     try {
       const result = await client.query<BlogPost>(
         `INSERT INTO blog_posts (
-          title, slug, excerpt, content, category, read_time,
-          author_id, featured_image_url, published, published_at,
-          meta_description, meta_keywords
+          title, slug, excerpt, content, category, tags, read_time,
+          author, author_id, featured_image_url, featured_image_alt,
+          featured_image_data, featured_image_filename, featured_image_mimetype, featured_image_size,
+          status, published, published_at, meta_description
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         RETURNING *`,
         [
           post.title,
@@ -548,13 +576,20 @@ export class PostgresStore {
           post.excerpt || null,
           post.content,
           post.category || null,
+          post.tags || [],
           post.read_time || null,
+          post.author || 'Michael',
           post.author_id || null,
           post.featured_image_url || null,
-          post.published,
+          post.featured_image_alt || null,
+          post.featured_image_data || null,
+          post.featured_image_filename || null,
+          post.featured_image_mimetype || null,
+          post.featured_image_size || null,
+          post.status || 'draft',
+          post.published || false,
           post.published_at || null,
           post.meta_description || null,
-          post.meta_keywords || null,
         ]
       );
       return result.rows[0];
@@ -568,7 +603,7 @@ export class PostgresStore {
     const client = await pool.connect();
     try {
       const fields: string[] = [];
-      const values: any[] = [];
+      const values: unknown[] = [];
       let paramIndex = 1;
 
       const fieldMapping: Record<string, string> = {
@@ -577,9 +612,17 @@ export class PostgresStore {
         excerpt: 'excerpt',
         content: 'content',
         category: 'category',
+        tags: 'tags',
         read_time: 'read_time',
+        author: 'author',
         author_id: 'author_id',
         featured_image_url: 'featured_image_url',
+        featured_image_alt: 'featured_image_alt',
+        featured_image_data: 'featured_image_data',
+        featured_image_filename: 'featured_image_filename',
+        featured_image_mimetype: 'featured_image_mimetype',
+        featured_image_size: 'featured_image_size',
+        status: 'status',
         published: 'published',
         published_at: 'published_at',
         meta_description: 'meta_description',
