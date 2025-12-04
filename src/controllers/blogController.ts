@@ -214,11 +214,25 @@ export class BlogController {
         meta_description: metaDescription,
       });
 
-      res.status(201).json({
-        success: true,
-        post: newPost,
-        message: 'Blog post created successfully',
-      });
+      // If image data was provided but no URL, generate URL to serve the image
+      if (imageBuffer && !featuredImageUrl && newPost.id) {
+        const imageUrl = `/api/blog/images/${newPost.id}`;
+        const updatedPost = await db.updateBlogPost(newPost.id, {
+          featured_image_url: imageUrl,
+        });
+
+        res.status(201).json({
+          success: true,
+          post: updatedPost || newPost,
+          message: 'Blog post created successfully',
+        });
+      } else {
+        res.status(201).json({
+          success: true,
+          post: newPost,
+          message: 'Blog post created successfully',
+        });
+      }
     } catch (error) {
       console.error('Error creating blog post:', error);
 
@@ -310,6 +324,20 @@ export class BlogController {
         }
       }
       if (updates.metaDescription !== undefined) dbUpdates.meta_description = updates.metaDescription;
+
+      // Handle base64 image data update
+      if (updates.featuredImageData) {
+        const base64Data = updates.featuredImageData.includes(',')
+          ? updates.featuredImageData.split(',')[1]
+          : updates.featuredImageData;
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+        dbUpdates.featured_image_data = imageBuffer;
+
+        // If no explicit URL provided, set URL to the image endpoint
+        if (!updates.featuredImageUrl) {
+          dbUpdates.featured_image_url = `/api/blog/images/${id}`;
+        }
+      }
 
       const updatedPost = await db.updateBlogPost(id, dbUpdates);
 
