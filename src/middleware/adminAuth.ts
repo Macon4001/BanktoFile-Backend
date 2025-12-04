@@ -51,7 +51,10 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
 
     // Get user email from token
     const userEmail = typeof decoded === 'object' ? decoded.email : undefined;
+    console.log('🔍 Admin check - User email from token:', userEmail);
+
     if (!userEmail) {
+      console.error('❌ No email found in token payload');
       return res.status(401).json({
         success: false,
         error: 'Invalid token payload',
@@ -61,8 +64,10 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
 
     // Check if user is admin
     const adminEmail = process.env.ADMIN_EMAIL;
+    console.log('🔍 Admin check - Admin email from env:', adminEmail);
+
     if (!adminEmail) {
-      console.error('ADMIN_EMAIL is not configured');
+      console.error('❌ ADMIN_EMAIL is not configured');
       return res.status(500).json({
         success: false,
         error: 'Admin configuration error',
@@ -70,7 +75,12 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
     }
 
     // Check if user's email matches admin email
-    if (userEmail.toLowerCase() !== adminEmail.toLowerCase()) {
+    const userEmailLower = userEmail.toLowerCase();
+    const adminEmailLower = adminEmail.toLowerCase();
+    console.log('🔍 Admin check - Comparing:', { userEmailLower, adminEmailLower });
+
+    if (userEmailLower !== adminEmailLower) {
+      console.error(`❌ Access denied for ${userEmail} - Admin is ${adminEmail}`);
       return res.status(403).json({
         success: false,
         error: 'Access denied. Admin privileges required.',
