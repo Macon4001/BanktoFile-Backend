@@ -133,10 +133,6 @@ export class BlogController {
         author,
         featuredImageUrl,
         featuredImageAlt,
-        featuredImageData, // Base64 string from upload
-        featuredImageFilename,
-        featuredImageMimetype,
-        featuredImageSize,
         status,
         metaDescription,
       } = req.body;
@@ -183,16 +179,6 @@ export class BlogController {
       const finalStatus = status || 'draft';
       const isPublished = finalStatus === 'published';
 
-      // Convert base64 image data to Buffer if provided
-      let imageBuffer: Buffer | undefined;
-      if (featuredImageData) {
-        // If it's a data URL, extract the base64 part
-        const base64Data = featuredImageData.includes(',')
-          ? featuredImageData.split(',')[1]
-          : featuredImageData;
-        imageBuffer = Buffer.from(base64Data, 'base64');
-      }
-
       const newPost = await db.createBlogPost({
         title,
         slug: finalSlug,
@@ -202,37 +188,19 @@ export class BlogController {
         tags: tags || [],
         read_time: readTime,
         author: author || 'Michael',
-        featured_image_url: featuredImageUrl,
+        featured_image_url: featuredImageUrl, // Now just stores the /api/blog/images/:id URL
         featured_image_alt: featuredImageAlt,
-        featured_image_data: imageBuffer,
-        featured_image_filename: featuredImageFilename,
-        featured_image_mimetype: featuredImageMimetype,
-        featured_image_size: featuredImageSize,
         status: finalStatus,
-        published: isPublished, // Keep for backwards compatibility
+        published: isPublished,
         published_at: isPublished ? new Date() : undefined,
         meta_description: metaDescription,
       });
 
-      // If image data was provided but no URL, generate URL to serve the image
-      if (imageBuffer && !featuredImageUrl && newPost.id) {
-        const imageUrl = `/api/blog/images/${newPost.id}`;
-        const updatedPost = await db.updateBlogPost(newPost.id, {
-          featured_image_url: imageUrl,
-        });
-
-        res.status(201).json({
-          success: true,
-          post: updatedPost || newPost,
-          message: 'Blog post created successfully',
-        });
-      } else {
-        res.status(201).json({
-          success: true,
-          post: newPost,
-          message: 'Blog post created successfully',
-        });
-      }
+      res.status(201).json({
+        success: true,
+        post: newPost,
+        message: 'Blog post created successfully',
+      });
     } catch (error) {
       console.error('Error creating blog post:', error);
 
@@ -324,20 +292,6 @@ export class BlogController {
         }
       }
       if (updates.metaDescription !== undefined) dbUpdates.meta_description = updates.metaDescription;
-
-      // Handle base64 image data update
-      if (updates.featuredImageData) {
-        const base64Data = updates.featuredImageData.includes(',')
-          ? updates.featuredImageData.split(',')[1]
-          : updates.featuredImageData;
-        const imageBuffer = Buffer.from(base64Data, 'base64');
-        dbUpdates.featured_image_data = imageBuffer;
-
-        // If no explicit URL provided, set URL to the image endpoint
-        if (!updates.featuredImageUrl) {
-          dbUpdates.featured_image_url = `/api/blog/images/${id}`;
-        }
-      }
 
       const updatedPost = await db.updateBlogPost(id, dbUpdates);
 
@@ -514,7 +468,7 @@ export class BlogController {
   }
 
   // Upload image for blog post (admin only)
-  // Stores image directly in PostgreSQL - no cloud storage needed!
+  // Stores image in separate blog_images table for better performance
   async uploadImage(req: Request, res: Response): Promise<void> {
     try {
       if (!req.file) {
@@ -525,19 +479,24 @@ export class BlogController {
         return;
       }
 
-      // Return image metadata that will be stored with the post
-      // The actual binary data will be saved when the post is created/updated
+      // Save image to blog_images table immediately
+      const imageId = await db.saveBlogImage({
+        filename: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        data: req.file.buffer,
+      });
+
+      // Return the image URL that can be used in the blog post
+      const imageUrl = `/api/blog/images/${imageId}`;
+
       res.status(200).json({
         success: true,
-        imageData: {
-          buffer: req.file.buffer,
-          filename: req.file.originalname,
-          mimetype: req.file.mimetype,
-          size: req.file.size,
-        },
-        // Also return base64 for immediate preview in the form
+        imageId,
+        url: imageUrl,
+        // Also return preview for immediate display
         preview: `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`,
-        message: 'Image ready to be saved with post (stored in PostgreSQL)',
+        message: 'Image uploaded successfully',
       });
 
     } catch (error) {
@@ -549,7 +508,7 @@ export class BlogController {
     }
   }
 
-  // Get blog post image by ID
+  // Get blog image by image ID
   async getPostImage(req: Request, res: Response): Promise<void> {
     try {
       const { id } = req.params;
@@ -557,33 +516,28 @@ export class BlogController {
       if (!id) {
         res.status(400).json({
           success: false,
-          error: 'Post ID is required',
+          error: 'Image ID is required',
         });
         return;
       }
 
-      const post = await db.getBlogPostById(id);
+      const image = await db.getBlogImage(id);
 
-      if (!post) {
-        res.status(404).send('Post not found');
+      if (!image) {
+        res.status(404).send('Image not found');
         return;
       }
 
-      if (!post.featured_image_data) {
-        res.status(404).send('No image found for this post');
-        return;
-      }
-
-      // Set proper headers
-      res.setHeader('Content-Type', post.featured_image_mimetype || 'image/jpeg');
-      res.setHeader('Content-Length', post.featured_image_size || post.featured_image_data.length);
-      res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+      // Set proper headers for image delivery
+      res.setHeader('Content-Type', image.mimetype);
+      res.setHeader('Content-Length', image.size);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // Cache for 1 year
 
       // Send the binary image data
-      res.send(post.featured_image_data);
+      res.send(image.data);
 
     } catch (error) {
-      console.error('Error fetching post image:', error);
+      console.error('Error fetching image:', error);
       res.status(500).send('Failed to fetch image');
     }
   }

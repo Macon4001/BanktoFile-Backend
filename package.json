@@ -19,6 +19,7 @@
     "@react-oauth/google": "^0.12.2",
     "@types/nodemailer": "^7.0.4",
     "bcryptjs": "^3.0.2",
+    "cloudinary": "^2.8.0",
     "cors": "^2.8.5",
     "csv-parser": "^3.0.0",
     "csv-stringify": "^6.5.1",

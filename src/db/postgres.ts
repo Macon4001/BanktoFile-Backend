@@ -845,6 +845,65 @@ export class PostgresStore {
       client.release();
     }
   }
+
+  // ===== Blog Image Methods =====
+
+  // Save a blog image to the blog_images table
+  async saveBlogImage(image: {
+    filename: string;
+    mimetype: string;
+    size: number;
+    data: Buffer;
+  }): Promise<string> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<{ id: string }>(
+        `INSERT INTO blog_images (filename, mimetype, size, data)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id`,
+        [image.filename, image.mimetype, image.size, image.data]
+      );
+      return result.rows[0].id;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get a blog image by ID
+  async getBlogImage(id: string): Promise<{
+    id: string;
+    filename: string;
+    mimetype: string;
+    size: number;
+    data: Buffer;
+  } | null> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT id, filename, mimetype, size, data
+         FROM blog_images
+         WHERE id = $1`,
+        [id]
+      );
+      return result.rows[0] || null;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Delete a blog image by ID
+  async deleteBlogImage(id: string): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `DELETE FROM blog_images WHERE id = $1`,
+        [id]
+      );
+      return (result.rowCount ?? 0) > 0;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 // Export singleton instance
