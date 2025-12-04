@@ -1,5 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
-import { verify, JwtPayload } from 'jsonwebtoken';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const jwt = require('jsonwebtoken');
 
 // Extend Express Request to include user info
 declare module 'express-serve-static-core' {
@@ -45,9 +49,10 @@ export async function requireAdmin(req: Request, res: Response, next: NextFuncti
     console.log('🔍 [ADMIN AUTH] JWT_SECRET configured:', !!jwtSecret);
     console.log('🔍 [ADMIN AUTH] Token (first 50 chars):', token.substring(0, 50));
 
-    let decoded: JwtPayload | string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let decoded: any;
     try {
-      decoded = verify(token, jwtSecret);
+      decoded = jwt.verify(token, jwtSecret);
       console.log('✅ [ADMIN AUTH] JWT verification successful');
     } catch (error) {
       console.error('❌ [ADMIN AUTH] JWT verification failed:', error);
@@ -133,9 +138,10 @@ export async function checkAdmin(req: Request, res: Response, next: NextFunction
       return next();
     }
 
-    let decoded: JwtPayload | string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let decoded: any;
     try {
-      decoded = verify(token, jwtSecret);
+      decoded = jwt.verify(token, jwtSecret);
     } catch {
       req.isAdmin = false;
       return next();
