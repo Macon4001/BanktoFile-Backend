@@ -171,8 +171,8 @@ export class BlogController {
       // Auto-generate slug from title if not provided
       const finalSlug = slug || this.generateSlug(title);
 
-      // Validate featured image alt text if image is provided
-      if (featuredImageUrl && !featuredImageAlt) {
+      // Validate featured image alt text if image is provided (but not for base64 data URLs)
+      if (featuredImageUrl && !featuredImageUrl.startsWith('data:') && !featuredImageAlt) {
         res.status(400).json({
           success: false,
           error: 'Alt text is required when featured image is provided',
@@ -295,8 +295,8 @@ export class BlogController {
         return;
       }
 
-      // Validate featured image alt text if image is being added
-      if (updates.featuredImageUrl && !updates.featuredImageAlt) {
+      // Validate featured image alt text if image is being added (but not for base64 data URLs)
+      if (updates.featuredImageUrl && !updates.featuredImageUrl.startsWith('data:') && !updates.featuredImageAlt) {
         res.status(400).json({
           success: false,
           error: 'Alt text is required when featured image is provided',
