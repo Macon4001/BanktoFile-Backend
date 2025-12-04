@@ -4,6 +4,8 @@ dotenv.config();
 
 import express, { Express, Request, Response } from "express";
 import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
 import uploadRoutes from "./routes/upload.js";
 import stripeRoutes from "./routes/stripe.js";
 import webhookRoutes from "./routes/webhooks.js";
@@ -13,6 +15,10 @@ import contactRoutes from "./routes/contact.js";
 import bankRequestRoutes from "./routes/bankRequest.js";
 import sitemapRoutes from "./routes/sitemap.js";
 import { ocrService } from "./services/ocrService.js";
+
+// Get __dirname equivalent in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
@@ -31,9 +37,23 @@ app.use("/webhooks", express.raw({ type: 'application/json' }), webhookRoutes);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Add response headers middleware
+// Serve static blog images from public/blog-images folder
+// Images can be accessed at: /blog-images/your-image.jpg
+const publicPath = path.join(__dirname, '..', 'public');
+app.use('/blog-images', express.static(path.join(publicPath, 'blog-images'), {
+  maxAge: '1y', // Cache for 1 year
+  immutable: true, // Images never change
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  }
+}));
+
+// Add response headers middleware (for API routes)
 app.use((_req: Request, res: Response, next) => {
-  res.setHeader('Content-Type', 'application/json');
+  // Only set JSON content-type for API routes
+  if (_req.path.startsWith('/api') || _req.path.startsWith('/webhooks')) {
+    res.setHeader('Content-Type', 'application/json');
+  }
   next();
 });
 
