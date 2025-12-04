@@ -15,10 +15,14 @@ declare module 'express-serve-static-core' {
  */
 export async function requireAdmin(req: Request, res: Response, next: NextFunction) {
   try {
+    console.log('🚀 [ADMIN AUTH] Middleware called for:', req.method, req.path);
+
     // Get token from Authorization header
     const authHeader = req.headers.authorization;
+    console.log('🚀 [ADMIN AUTH] Authorization header present:', !!authHeader);
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.error('❌ [ADMIN AUTH] No Bearer token in header');
       return res.status(401).json({
         success: false,
         error: 'No authentication token provided',
