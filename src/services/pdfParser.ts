@@ -117,6 +117,12 @@ export class PDFParser {
       return this.extractBarclaysTransactions(text);
     }
 
+    // Check if this is a Revolut statement
+    if (text.includes("Revolut") || text.includes("REVOGB21") || text.includes("REVO009")) {
+      console.log("Detected Revolut bank statement");
+      return this.extractRevolutTransactions(text);
+    }
+
     // Common date patterns (non-global for better matching)
     const datePatterns = [
       /\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/, // MM/DD/YYYY or DD/MM/YYYY
@@ -1981,6 +1987,214 @@ export class PDFParser {
     }
 
     console.log(`Extracted ${transactions.length} Barclays transactions`);
+    return transactions;
+  }
+
+  // Extract transactions from Revolut bank statements
+  private extractRevolutTransactions(text: string): Transaction[] {
+    const transactions: Transaction[] = [];
+    const lines = text.split('\n');
+
+    console.log('Parsing Revolut statement...');
+
+    // Revolut date pattern: "DD MMM YYYY" (e.g., "19 Jun 2025" or "19Jun2025" without spaces)
+    // Also handle concatenated format like "19 Jun 2025Transfer from..."
+    const revolutDatePattern = /(\d{1,2}\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*\d{4})/i;
+
+    // Track whether we're in the transaction section
+    let inTransactionSection = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Skip empty lines
+      if (!line) continue;
+
+      // Start of transaction section - look for "Account transactions from"
+      if (line.includes('Account transactions from')) {
+        inTransactionSection = true;
+        console.log(`Found Revolut transaction section at line ${i}: "${line}"`);
+        continue;
+      }
+
+      // Skip the header line with "DateDescriptionMoney"
+      if (line.includes('DateDescription') || line.includes('Date Description')) {
+        console.log(`Skipping header line: "${line}"`);
+        continue;
+      }
+
+      // End of transaction section
+      if (inTransactionSection && (
+        line.includes('Report lost or stolen card') ||
+        line.includes('Revolut Ltd') && line.includes('08804411') ||
+        line.includes('authorised by the Financial Conduct Authority') ||
+        line.includes('Registered address')
+      )) {
+        inTransactionSection = false;
+        console.log('Reached end of transaction section');
+        break;
+      }
+
+      // Skip header lines and non-transaction content
+      if (!inTransactionSection ||
+          line.includes('IBAN') ||
+          line.includes('BIC') ||
+          line.includes('Sort Code') ||
+          line.includes('Account Number') ||
+          line.includes('Balance summary') ||
+          line.includes('Product') ||
+          line.includes('Opening balance') ||
+          line.includes('Money out') && line.includes('Money in') && line.includes('Closing') ||
+          line.includes('Account (E-Money)') ||
+          line.includes('The balance on your statement') ||
+          line.match(/^Total\s+£/i)) {
+        continue;
+      }
+
+      // Check if this line contains a date
+      const dateMatch = line.match(revolutDatePattern);
+
+      if (dateMatch) {
+        const date = dateMatch[1].replace(/\s+/g, ' ').trim(); // Normalize spaces in date
+        const dateIndex = line.indexOf(dateMatch[1]);
+        const restOfLine = line.substring(dateIndex + dateMatch[1].length).trim();
+
+        console.log(`Found transaction: ${date} - ${restOfLine.substring(0, 60)}...`);
+
+        // Revolut format: "DD MMM YYYY Description MoneyOut MoneyIn Balance"
+        // Extract all numbers (amounts with 2 decimal places)
+        const numbers = restOfLine.match(/\d+\.\d{2}/g);
+
+        if (numbers && numbers.length >= 1) {
+          const amounts = numbers.map(n => parseFloat(n));
+
+          // Find where the first number appears
+          const firstNumberIndex = restOfLine.indexOf(numbers[0]);
+          let description = restOfLine.substring(0, firstNumberIndex).trim();
+
+          // If description is empty or very short, it might be on the next line(s)
+          if (description.length < 3 && i + 1 < lines.length) {
+            let j = i + 1;
+            while (j < lines.length && j < i + 3) {
+              const nextLine = lines[j].trim();
+              // Stop if we hit another date or section marker
+              if (revolutDatePattern.test(nextLine) ||
+                  nextLine.includes('Report lost or stolen card') ||
+                  nextLine.includes('Revolut Ltd')) {
+                break;
+              }
+              // Skip if it's just numbers
+              if (/^\d+\.\d{2}$/.test(nextLine)) {
+                j++;
+                continue;
+              }
+              // Add to description
+              description += ' ' + nextLine;
+              j++;
+            }
+            description = description.trim();
+          }
+
+          // Clean up description - remove extra spaces and metadata
+          description = description
+            .replace(/\s+/g, ' ')
+            .replace(/Reference:\s*/gi, '')
+            .replace(/Sent from Revolut/gi, '')
+            .replace(/From:\s*/gi, 'From ')
+            .replace(/To:\s*/gi, 'To ')
+            .trim();
+
+          // Determine transaction type and amounts
+          let moneyOut = 0;
+          let moneyIn = 0;
+          let balance = 0;
+          let amount = 0;
+          let type: 'credit' | 'debit' = 'debit';
+
+          if (amounts.length === 1) {
+            // Only one amount - could be money in/out with no balance
+            // Check description for clues
+            const lower = description.toLowerCase();
+            if (lower.includes('transfer from') || lower.includes('from ')) {
+              moneyIn = amounts[0];
+              amount = moneyIn;
+              type = 'credit';
+            } else if (lower.includes('to ')) {
+              moneyOut = amounts[0];
+              amount = moneyOut;
+              type = 'debit';
+            } else {
+              // Assume it's money in by default
+              moneyIn = amounts[0];
+              amount = moneyIn;
+              type = 'credit';
+            }
+          } else if (amounts.length === 2) {
+            // Two amounts - likely amount and balance
+            amount = amounts[0];
+            balance = amounts[1];
+
+            // Determine type from description
+            const lower = description.toLowerCase();
+            if (lower.includes('transfer from') || lower.includes('from ')) {
+              moneyIn = amount;
+              type = 'credit';
+            } else if (lower.includes('to ')) {
+              moneyOut = amount;
+              type = 'debit';
+            } else {
+              // Default to credit if unclear
+              moneyIn = amount;
+              type = 'credit';
+            }
+          } else if (amounts.length >= 3) {
+            // Three amounts - money out, money in, balance
+            moneyOut = amounts[amounts.length - 3];
+            moneyIn = amounts[amounts.length - 2];
+            balance = amounts[amounts.length - 1];
+
+            // Determine which is the actual transaction
+            if (moneyIn > 0 && (moneyOut === 0 || moneyOut < 0.01)) {
+              amount = moneyIn;
+              type = 'credit';
+            } else if (moneyOut > 0 && (moneyIn === 0 || moneyIn < 0.01)) {
+              amount = moneyOut;
+              type = 'debit';
+            } else if (moneyIn > 0) {
+              // Both present - use description to decide
+              const lower = description.toLowerCase();
+              if (lower.includes('from')) {
+                amount = moneyIn;
+                type = 'credit';
+              } else {
+                amount = moneyOut;
+                type = 'debit';
+              }
+            } else if (moneyOut > 0) {
+              amount = moneyOut;
+              type = 'debit';
+            }
+          }
+
+          // Validate and add transaction
+          if (amount > 0 && description && description.length > 2) {
+            transactions.push({
+              date,
+              description,
+              amount,
+              balance: balance > 0 ? balance : undefined,
+              type,
+            });
+
+            if (transactions.length <= 5) {
+              console.log(`✓ ${date} | ${description.substring(0, 40)} | ${type} £${amount} | Bal: £${balance}`);
+            }
+          }
+        }
+      }
+    }
+
+    console.log(`Extracted ${transactions.length} Revolut transactions`);
     return transactions;
   }
 
