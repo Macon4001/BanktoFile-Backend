@@ -2098,6 +2098,8 @@ export class PDFParser {
           // Clean up description - remove extra spaces and metadata
           description = description
             .replace(/\s+/g, ' ')
+            .replace(/£\s*$/g, '') // Remove trailing £ symbol
+            .replace(/\s*£\s*$/g, '') // Remove £ with surrounding spaces at end
             .replace(/Reference:\s*/gi, '')
             .replace(/Sent from Revolut/gi, '')
             .replace(/From:\s*/gi, 'From ')
