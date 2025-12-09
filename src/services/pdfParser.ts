@@ -111,6 +111,12 @@ export class PDFParser {
       return this.extractMonzoTransactions(text);
     }
 
+    // Check if this is a Metro Bank statement (check before Barclays as it might have similar keywords)
+    if (text.includes("Metro Bank") || text.includes("MYMBGB2L") || (text.includes("MYMB") && text.includes("Cash Account Statement"))) {
+      console.log("Detected Metro Bank statement");
+      return this.extractMetroBankTransactions(text);
+    }
+
     // Check if this is a Barclays statement
     if (text.includes("Barclays Bank") || text.includes("BARCLAYS") || text.includes("BUKBGB22")) {
       console.log("Detected Barclays bank statement");
@@ -1987,6 +1993,244 @@ export class PDFParser {
     }
 
     console.log(`Extracted ${transactions.length} Barclays transactions`);
+    return transactions;
+  }
+
+  // Extract transactions from Metro Bank statements
+  // Metro Bank uses a COLUMNAR format where dates, transactions, and amounts are in separate columns
+  // IMPORTANT: This is a TABLE format where row positions must align across columns
+  private extractMetroBankTransactions(text: string): Transaction[] {
+    const transactions: Transaction[] = [];
+    const lines = text.split('\n');
+
+    console.log('Parsing Metro Bank statement (columnar format)...');
+
+    // Arrays to hold ALL parsed data from all pages
+    const allDates: string[] = [];
+    const allDescriptions: string[] = [];
+    const allMoneyOut: number[] = [];
+    const allMoneyIn: number[] = [];
+    const allBalances: number[] = [];
+
+    // Find ALL occurrences of column headers throughout the document
+    const datePattern = /^\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4}$/i;
+
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i].trim();
+
+      // Look for DATE column header
+      if (line === 'DATE') {
+        console.log(`Found DATE column at line ${i}`);
+        i++;
+
+        // Extract dates until we hit TRANSACTION or end
+        while (i < lines.length) {
+          const dateLine = lines[i].trim();
+          if (dateLine === 'TRANSACTION' || dateLine === 'MONEY OUT' || dateLine === 'MONEY IN' || dateLine === 'BALANCE') break;
+          if (dateLine.includes('metrobank') || dateLine.includes('MBS2C_') || dateLine.includes('Cash Account Statement')) break;
+
+          if (datePattern.test(dateLine)) {
+            allDates.push(dateLine);
+          }
+          i++;
+        }
+        console.log(`  Collected ${allDates.length} dates so far`);
+      }
+
+      // Look for TRANSACTION column header
+      else if (line === 'TRANSACTION') {
+        console.log(`Found TRANSACTION column at line ${i}`);
+        i++;
+
+        let currentDesc = '';
+        while (i < lines.length) {
+          const transLine = lines[i].trim();
+
+          if (transLine === 'DATE' || transLine === 'MONEY OUT' || transLine === 'MONEY IN' || transLine === 'BALANCE') break;
+          if (transLine.includes('metrobank') || transLine.includes('MBS2C_') || transLine.includes('Cash Account Statement')) break;
+
+          // Skip balance brought forward (but we'll track it for opening balance)
+          if (transLine.includes('Balance brought forward')) {
+            // Don't add to descriptions, but continue processing
+            i++;
+            continue;
+          }
+
+          // Check if this starts a new transaction
+          const isTransactionStart = /^(Card Purchase|Account to Account Transfer|Inward Payment|Outward Faster Payment|ATM Cash Withdrawal|Direct Debit|Closing Balance)/i.test(transLine);
+
+          if (isTransactionStart) {
+            if (currentDesc) {
+              allDescriptions.push(currentDesc.trim());
+            }
+            // Skip "Closing Balance" as it's not a transaction
+            if (transLine.includes('Closing Balance')) {
+              i++;
+              break;
+            }
+            currentDesc = transLine;
+          } else if (transLine && currentDesc) {
+            currentDesc += ' ' + transLine;
+          }
+
+          i++;
+        }
+
+        if (currentDesc && !currentDesc.includes('Closing Balance')) {
+          allDescriptions.push(currentDesc.trim());
+        }
+        console.log(`  Collected ${allDescriptions.length} descriptions so far`);
+      }
+
+      // Look for MONEY OUT column header
+      else if (line === 'MONEY OUT') {
+        console.log(`Found MONEY OUT column at line ${i}`);
+        i++;
+
+        let moneyOutCount = 0;
+
+        while (i < lines.length) {
+          const amountLine = lines[i].trim();
+          if (amountLine === 'DATE' || amountLine === 'TRANSACTION' || amountLine === 'MONEY IN' || amountLine === 'BALANCE') break;
+          if (amountLine.includes('MBS2C_') || amountLine.includes('Cash Account Statement')) break;
+
+          const amountMatch = amountLine.match(/^\d+\.\d{2}$/);
+          if (amountMatch) {
+            allMoneyOut.push(parseFloat(amountLine));
+            moneyOutCount++;
+          }
+          i++;
+        }
+        console.log(`  Collected ${moneyOutCount} money out amounts (total ${allMoneyOut.length})`);
+      }
+
+      // Look for MONEY IN column header
+      else if (line === 'MONEY IN') {
+        console.log(`Found MONEY IN column at line ${i}`);
+        i++;
+
+        let moneyInCount = 0;
+
+        while (i < lines.length) {
+          const amountLine = lines[i].trim();
+          if (amountLine === 'DATE' || amountLine === 'TRANSACTION' || amountLine === 'MONEY OUT' || amountLine === 'BALANCE') break;
+          if (amountLine.includes('MBS2C_') || amountLine.includes('Cash Account Statement')) break;
+
+          const amountMatch = amountLine.match(/^\d+\.\d{2}$/);
+          if (amountMatch) {
+            allMoneyIn.push(parseFloat(amountLine));
+            moneyInCount++;
+          }
+          i++;
+        }
+        console.log(`  Collected ${moneyInCount} money in amounts (total ${allMoneyIn.length})`);
+      }
+
+      // Look for BALANCE column header
+      else if (line === 'BALANCE') {
+        console.log(`Found BALANCE column at line ${i}`);
+        i++;
+
+        while (i < lines.length) {
+          const balanceLine = lines[i].trim();
+          if (balanceLine === 'DATE' || balanceLine === 'TRANSACTION' || balanceLine === 'MONEY OUT' || balanceLine === 'MONEY IN') break;
+          if (balanceLine.includes('MBS2C_') || balanceLine.includes('Cash Account Statement')) break;
+
+          const balanceMatch = balanceLine.match(/^\d+\.\d{2}$/);
+          if (balanceMatch) {
+            allBalances.push(parseFloat(balanceLine));
+          }
+          i++;
+        }
+        console.log(`  Collected ${allBalances.length} balances so far`);
+      }
+
+      else {
+        i++;
+      }
+    }
+
+    console.log(`\nFinal counts:`);
+    console.log(`  Dates: ${allDates.length}`);
+    console.log(`  Descriptions: ${allDescriptions.length}`);
+    console.log(`  Money Out: ${allMoneyOut.length}`);
+    console.log(`  Money In: ${allMoneyIn.length}`);
+    console.log(`  Balances: ${allBalances.length}`);
+
+    console.log(`\nAnalyzing transaction structure...`);
+    console.log(`Note: MONEY OUT and MONEY IN are sparse columns`);
+    console.log(`Strategy: Match by balance and infer from transaction type`);
+
+    // Better approach: Use balance changes to determine amounts
+    const numTransactions = Math.min(allDates.length, allDescriptions.length, allBalances.length);
+    console.log(`\nCombining ${numTransactions} transactions using balance-based matching...`);
+
+    // The first balance corresponds to "Balance brought forward" (opening balance)
+    // Since we skip "Balance brought forward" in descriptions, we have one more balance than descriptions
+    let openingBalance: number | undefined;
+    if (allBalances.length > allDescriptions.length) {
+      // First balance is the opening balance from "Balance brought forward"
+      openingBalance = allBalances[0];
+      console.log(`Detected opening balance from 'Balance brought forward': £${openingBalance}`);
+    }
+
+    let previousBalance: number | undefined = openingBalance;
+
+    for (let i = 0; i < numTransactions; i++) {
+      const date = allDates[i];
+      const description = allDescriptions[i];
+      // Balance array has one extra entry (opening balance), so offset by 1
+      const balance = allBalances.length > allDescriptions.length ? allBalances[i + 1] : allBalances[i];
+
+      // Determine if credit or debit from transaction description
+      const lower = description.toLowerCase();
+      const isCredit = lower.includes('inward payment');
+      const isDebit = lower.includes('card purchase') ||
+                     lower.includes('outward') ||
+                     lower.includes('atm cash withdrawal') ||
+                     lower.includes('direct debit');
+
+      // Calculate amount from balance change
+      let amount = 0;
+      let type: 'credit' | 'debit' = 'debit';
+
+      if (previousBalance !== undefined && balance !== undefined) {
+        const balanceChange = balance - previousBalance;
+        amount = Math.abs(balanceChange);
+        type = balanceChange > 0 ? 'credit' : 'debit';
+      } else {
+        // No previous balance - infer type from description
+        if (isCredit) {
+          type = 'credit';
+        } else if (isDebit) {
+          type = 'debit';
+        } else if (lower.includes('account to account transfer')) {
+          type = 'credit';
+        }
+
+        // Can't calculate amount without previous balance - skip
+        amount = 0;
+      }
+
+      previousBalance = balance;
+
+      if (description && amount > 0) {
+        transactions.push({
+          date,
+          description,
+          amount: amount > 0 ? amount : 0.01, // Temporary small amount if we couldn't calculate
+          balance,
+          type,
+        });
+
+        if (transactions.length <= 5) {
+          console.log(`✓ ${date} | ${description.substring(0, 40)} | ${type} £${amount.toFixed(2)} | Bal: ${balance}`);
+        }
+      }
+    }
+
+    console.log(`\nExtracted ${transactions.length} Metro Bank transactions`);
     return transactions;
   }
 
