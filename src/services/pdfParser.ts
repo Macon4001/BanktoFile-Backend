@@ -1,7 +1,13 @@
 import * as pdfParse from "pdf-parse";
 import { Transaction, ParsedStatement } from "../types/index.js";
+import { MetroBankCoordinateParser } from "./metroBankCoordinateParser.js";
 
 export class PDFParser {
+  private metroBankParser: MetroBankCoordinateParser;
+
+  constructor() {
+    this.metroBankParser = new MetroBankCoordinateParser();
+  }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean }> {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -25,7 +31,19 @@ export class PDFParser {
         };
       }
 
-      // Extract transactions from the PDF text
+      // Check if this is a Metro Bank statement - use coordinate-based parser
+      // Metro Bank PDFs have chaotic text ordering that breaks text-based parsing
+      if (text.includes("Metro Bank") || text.includes("MYMBGB2L") || (text.includes("MYMB") && text.includes("Cash Account Statement"))) {
+        console.log("Detected Metro Bank statement - using coordinate-based parser");
+        const transactions = await this.extractMetroBankTransactionsCoordinate(buffer, text);
+        return {
+          transactions,
+          metadata: this.extractMetadata(text),
+          rawText: text,
+        };
+      }
+
+      // Extract transactions from the PDF text (for other banks)
       const transactions = this.extractTransactions(text);
 
       console.log(`Extracted ${transactions.length} transactions`); // Debug log
@@ -111,11 +129,7 @@ export class PDFParser {
       return this.extractMonzoTransactions(text);
     }
 
-    // Check if this is a Metro Bank statement (check before Barclays as it might have similar keywords)
-    if (text.includes("Metro Bank") || text.includes("MYMBGB2L") || (text.includes("MYMB") && text.includes("Cash Account Statement"))) {
-      console.log("Detected Metro Bank statement");
-      return this.extractMetroBankTransactions(text);
-    }
+    // Note: Metro Bank detection moved to parsePDF() method to use coordinate-based parser
 
     // Check if this is a Barclays statement
     if (text.includes("Barclays Bank") || text.includes("BARCLAYS") || text.includes("BUKBGB22")) {
@@ -2004,13 +2018,17 @@ export class PDFParser {
     const lines = text.split('\n');
 
     console.log('Parsing Metro Bank statement (columnar format)...');
+    console.log('Total lines in document:', lines.length);
 
     // Arrays to hold ALL parsed data from all pages
     const allDates: string[] = [];
     const allDescriptions: string[] = [];
-    const allMoneyOut: number[] = [];
-    const allMoneyIn: number[] = [];
+    const allMoneyOut: (number | null)[] = [];
+    const allMoneyIn: (number | null)[] = [];
     const allBalances: number[] = [];
+
+    // Combined array to preserve order of Money Out/In as they appear in text
+    const allMoneyValues: Array<{ amount: number; type: 'debit' | 'credit' }> = [];
 
     // Find ALL occurrences of column headers throughout the document
     const datePattern = /^\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4}$/i;
@@ -2021,129 +2039,266 @@ export class PDFParser {
 
       // Look for DATE column header
       if (line === 'DATE') {
-        console.log(`Found DATE column at line ${i}`);
+        console.log(`\n[Column Scan] Found DATE column at line ${i}`);
         i++;
 
-        // Extract dates until we hit TRANSACTION or end
+        const tempDates: string[] = [];
+        // Extract dates until we hit another column header or end
         while (i < lines.length) {
           const dateLine = lines[i].trim();
+
+          // Stop if we hit another column header
           if (dateLine === 'TRANSACTION' || dateLine === 'MONEY OUT' || dateLine === 'MONEY IN' || dateLine === 'BALANCE') break;
+          // Stop if we hit page break indicators
           if (dateLine.includes('metrobank') || dateLine.includes('MBS2C_') || dateLine.includes('Cash Account Statement')) break;
+          // Stop on empty lines that might indicate end of column
+          if (!dateLine) {
+            i++;
+            continue;
+          }
 
           if (datePattern.test(dateLine)) {
-            allDates.push(dateLine);
+            tempDates.push(dateLine);
+            console.log(`  → Date ${tempDates.length}: ${dateLine}`);
           }
           i++;
         }
-        console.log(`  Collected ${allDates.length} dates so far`);
+        allDates.push(...tempDates);
+        console.log(`  ✓ Total dates collected: ${allDates.length}`);
+        continue;
       }
 
       // Look for TRANSACTION column header
       else if (line === 'TRANSACTION') {
-        console.log(`Found TRANSACTION column at line ${i}`);
+        console.log(`\n[Column Scan] Found TRANSACTION column at line ${i}`);
         i++;
 
+        const tempDescriptions: string[] = [];
         let currentDesc = '';
+        let lineNumber = 0;
+
+        // Log first 10 lines after TRANSACTION header for debugging
+        console.log(`  [DEBUG] First 10 lines after TRANSACTION header:`);
+        for (let debugIdx = 0; debugIdx < Math.min(10, lines.length - i); debugIdx++) {
+          console.log(`    ${debugIdx + 1}: "${lines[i + debugIdx].trim()}"`);
+        }
+        console.log(`  [DEBUG] Starting line-by-line parsing...\n`);
+
         while (i < lines.length) {
           const transLine = lines[i].trim();
+          lineNumber++;
 
+          // Stop if we hit another column header
           if (transLine === 'DATE' || transLine === 'MONEY OUT' || transLine === 'MONEY IN' || transLine === 'BALANCE') break;
+          // Stop if we hit page break indicators
           if (transLine.includes('metrobank') || transLine.includes('MBS2C_') || transLine.includes('Cash Account Statement')) break;
 
-          // Skip balance brought forward (but we'll track it for opening balance)
-          if (transLine.includes('Balance brought forward')) {
-            // Don't add to descriptions, but continue processing
+          // Skip balance brought forward (we'll track this separately)
+          // Use case-insensitive match with trimming to handle variations
+          if (transLine.toLowerCase().trim() === 'balance brought forward') {
+            if (currentDesc) {
+              tempDescriptions.push(currentDesc.trim());
+              console.log(`  → Desc ${tempDescriptions.length}: ${currentDesc.trim().substring(0, 50)}...`);
+              currentDesc = '';
+            }
+            console.log(`  → Skipping "Balance brought forward" line`);
             i++;
             continue;
           }
 
           // Check if this starts a new transaction
-          const isTransactionStart = /^(Card Purchase|Account to Account Transfer|Inward Payment|Outward Faster Payment|ATM Cash Withdrawal|Direct Debit|Closing Balance)/i.test(transLine);
+          const isTransactionStart = /^(Card Purchase|Account to Account Transfer|Inward Payment|Outward Faster Payment|ATM Cash Withdrawal|Direct Debit|Closing Balance|Interest Paid)/i.test(transLine);
 
           if (isTransactionStart) {
-            if (currentDesc) {
-              allDescriptions.push(currentDesc.trim());
+            console.log(`  [Line ${lineNumber}] Transaction start detected: "${transLine.substring(0, 40)}..."`);
+
+            // Save previous description if it exists
+            if (currentDesc && !currentDesc.includes('Closing Balance')) {
+              tempDescriptions.push(currentDesc.trim());
+              console.log(`  → Desc ${tempDescriptions.length}: ${currentDesc.trim().substring(0, 50)}...`);
             }
+
             // Skip "Closing Balance" as it's not a transaction
             if (transLine.includes('Closing Balance')) {
+              currentDesc = '';
               i++;
               break;
             }
+
             currentDesc = transLine;
           } else if (transLine && currentDesc) {
+            // Continuation of current description
+            console.log(`  [Line ${lineNumber}] Appending to current desc: "${transLine.substring(0, 30)}..."`);
             currentDesc += ' ' + transLine;
+          } else if (!transLine && currentDesc) {
+            // Empty line might signal end of description
+            // But don't finalize yet, keep going
+            console.log(`  [Line ${lineNumber}] Empty line (keeping current desc active)`);
+          } else if (!transLine) {
+            console.log(`  [Line ${lineNumber}] Empty line (no current desc)`);
+          } else {
+            console.log(`  [Line ${lineNumber}] ⚠️  Unhandled line: "${transLine.substring(0, 40)}..."`);
           }
 
           i++;
         }
 
+        // Save last description if it exists
         if (currentDesc && !currentDesc.includes('Closing Balance')) {
-          allDescriptions.push(currentDesc.trim());
+          tempDescriptions.push(currentDesc.trim());
+          console.log(`  → Desc ${tempDescriptions.length}: ${currentDesc.trim().substring(0, 50)}...`);
         }
-        console.log(`  Collected ${allDescriptions.length} descriptions so far`);
+
+        allDescriptions.push(...tempDescriptions);
+        console.log(`  ✓ Total descriptions collected: ${allDescriptions.length}`);
+        continue;
       }
 
       // Look for MONEY OUT column header
       else if (line === 'MONEY OUT') {
-        console.log(`Found MONEY OUT column at line ${i}`);
+        console.log(`\n[Column Scan] Found MONEY OUT column at line ${i}`);
         i++;
 
-        let moneyOutCount = 0;
+        // We need to collect values but they're sparse - not every transaction has money out
+        // We'll collect all the values we find and use them to verify balance-based calculations
+        const tempMoneyOutValues: number[] = [];
 
         while (i < lines.length) {
           const amountLine = lines[i].trim();
+
+          // Stop if we hit another column header
           if (amountLine === 'DATE' || amountLine === 'TRANSACTION' || amountLine === 'MONEY IN' || amountLine === 'BALANCE') break;
+          // Stop if we hit page break indicators
           if (amountLine.includes('MBS2C_') || amountLine.includes('Cash Account Statement')) break;
 
-          const amountMatch = amountLine.match(/^\d+\.\d{2}$/);
-          if (amountMatch) {
-            allMoneyOut.push(parseFloat(amountLine));
-            moneyOutCount++;
+          // Skip summary/header lines that appear between MONEY OUT header and actual values
+          if (amountLine.includes('BIC:') ||
+              amountLine.includes('IBAN:') ||
+              amountLine.includes('Account No:') ||
+              amountLine.includes('Sort Code:') ||
+              amountLine === 'Statement' ||
+              amountLine === 'Account Summary' ||
+              amountLine.includes('Opening Balance') ||
+              amountLine.includes('Total Money In') ||
+              amountLine.includes('Total Money Out') ||
+              amountLine.includes('Closing Balance') ||
+              amountLine.includes('No:') ||
+              amountLine.match(/^\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4}$/i) || // Date
+              amountLine.match(/^-\s+\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s+\d{4}$/i)) { // Date range
+            i++;
+            continue; // Skip these lines
           }
+
+          // Match amounts (must be pure number format: digits.digits)
+          const amountMatch = amountLine.match(/^(\d+(?:,\d{3})*\.\d{2})$/);
+          if (amountMatch) {
+            const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+            tempMoneyOutValues.push(amount);
+            console.log(`  → Found money out value: £${amount.toFixed(2)}`);
+          }
+
           i++;
         }
-        console.log(`  Collected ${moneyOutCount} money out amounts (total ${allMoneyOut.length})`);
+
+        console.log(`  ✓ Total money out values found: ${tempMoneyOutValues.length}`);
+        // Store as sparse array - we'll use these to verify balance-based calculations
+        allMoneyOut.push(...tempMoneyOutValues.map(v => v as number | null));
+        // Also add to combined array preserving order
+        tempMoneyOutValues.forEach(amount => {
+          allMoneyValues.push({ amount, type: 'debit' });
+        });
+        continue;
       }
 
       // Look for MONEY IN column header
       else if (line === 'MONEY IN') {
-        console.log(`Found MONEY IN column at line ${i}`);
+        console.log(`\n[Column Scan] Found MONEY IN column at line ${i}`);
         i++;
 
-        let moneyInCount = 0;
+        // Collect all money in values (also sparse)
+        // We'll collect all the values we find and use them to verify balance-based calculations
+        const tempMoneyInValues: number[] = [];
 
         while (i < lines.length) {
           const amountLine = lines[i].trim();
+
+          // Stop if we hit another column header
           if (amountLine === 'DATE' || amountLine === 'TRANSACTION' || amountLine === 'MONEY OUT' || amountLine === 'BALANCE') break;
+          // Stop if we hit page break indicators
           if (amountLine.includes('MBS2C_') || amountLine.includes('Cash Account Statement')) break;
 
-          const amountMatch = amountLine.match(/^\d+\.\d{2}$/);
-          if (amountMatch) {
-            allMoneyIn.push(parseFloat(amountLine));
-            moneyInCount++;
+          // Skip summary/header lines that appear between MONEY IN header and actual values
+          if (amountLine.includes('BIC:') ||
+              amountLine.includes('IBAN:') ||
+              amountLine.includes('Account No:') ||
+              amountLine.includes('Sort Code:') ||
+              amountLine.includes('MYMBGB') ||
+              amountLine.includes('GB98MYMB') ||
+              amountLine.match(/^\d{8}$/) || // Account number
+              amountLine.match(/^\d{2}-\d{2}-\d{2}$/)) { // Sort code
+            i++;
+            continue; // Skip these lines
           }
+
+          // Match amounts (must be pure number format: digits.digits)
+          const amountMatch = amountLine.match(/^(\d+(?:,\d{3})*\.\d{2})$/);
+          if (amountMatch) {
+            const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+            tempMoneyInValues.push(amount);
+            console.log(`  → Found money in value: £${amount.toFixed(2)}`);
+          }
+
           i++;
         }
-        console.log(`  Collected ${moneyInCount} money in amounts (total ${allMoneyIn.length})`);
+
+        console.log(`  ✓ Total money in values found: ${tempMoneyInValues.length}`);
+        // Store as sparse array - we'll use these to verify balance-based calculations
+        allMoneyIn.push(...tempMoneyInValues.map(v => v as number | null));
+        // Also add to combined array preserving order
+        tempMoneyInValues.forEach(amount => {
+          allMoneyValues.push({ amount, type: 'credit' });
+        });
+        continue;
       }
 
       // Look for BALANCE column header
       else if (line === 'BALANCE') {
-        console.log(`Found BALANCE column at line ${i}`);
+        console.log(`\n[Column Scan] Found BALANCE column at line ${i}`);
         i++;
+
+        const tempBalances: number[] = [];
 
         while (i < lines.length) {
           const balanceLine = lines[i].trim();
-          if (balanceLine === 'DATE' || balanceLine === 'TRANSACTION' || balanceLine === 'MONEY OUT' || balanceLine === 'MONEY IN') break;
-          if (balanceLine.includes('MBS2C_') || balanceLine.includes('Cash Account Statement')) break;
 
-          const balanceMatch = balanceLine.match(/^\d+\.\d{2}$/);
-          if (balanceMatch) {
-            allBalances.push(parseFloat(balanceLine));
+          // Stop if we hit another column header
+          if (balanceLine === 'DATE' || balanceLine === 'TRANSACTION' || balanceLine === 'MONEY OUT' || balanceLine === 'MONEY IN') break;
+          // Stop if we hit page break indicators
+          if (balanceLine.includes('MBS2C_') || balanceLine.includes('Cash Account Statement')) break;
+          // Stop if we see the document footer
+          if (balanceLine.includes('metrobank') || balanceLine.includes('MBS2C_') || balanceLine.includes('Southampton Row')) break;
+
+          // Skip lines with £ symbol (these are summary values like "£73.88" or "£95.89")
+          if (balanceLine.includes('£')) {
+            console.log(`  → Skipping summary value: ${balanceLine}`);
+            i++;
+            continue;
           }
+
+          // Match pure number balances: digits.digits format
+          const balanceMatch = balanceLine.match(/^(\d+(?:,\d{3})*\.\d{2})$/);
+          if (balanceMatch) {
+            const balance = parseFloat(balanceMatch[1].replace(/,/g, ''));
+            tempBalances.push(balance);
+            console.log(`  → Balance ${tempBalances.length}: £${balance.toFixed(2)}`);
+          }
+
           i++;
         }
-        console.log(`  Collected ${allBalances.length} balances so far`);
+
+        allBalances.push(...tempBalances);
+        console.log(`  ✓ Total balances collected: ${allBalances.length}`);
+        continue;
       }
 
       else {
@@ -2151,87 +2306,391 @@ export class PDFParser {
       }
     }
 
-    console.log(`\nFinal counts:`);
+    console.log(`\n========== FINAL COLUMN COUNTS ==========`);
     console.log(`  Dates: ${allDates.length}`);
     console.log(`  Descriptions: ${allDescriptions.length}`);
-    console.log(`  Money Out: ${allMoneyOut.length}`);
-    console.log(`  Money In: ${allMoneyIn.length}`);
+    console.log(`  Money Out values: ${allMoneyOut.length}`);
+    console.log(`  Money In values: ${allMoneyIn.length}`);
     console.log(`  Balances: ${allBalances.length}`);
+    console.log(`==========================================`);
 
-    console.log(`\nAnalyzing transaction structure...`);
-    console.log(`Note: MONEY OUT and MONEY IN are sparse columns`);
-    console.log(`Strategy: Match by balance and infer from transaction type`);
+    // Fix Money Out/In ordering issue: Use POSITIONAL logic instead of value-based logic
+    // Pattern discovered: For Metro Bank PDFs, the combined array has this structure:
+    // [MoneyOut[0], MoneyOut[1], ..., MoneyOut[N-2], MoneyOut[N-1], MoneyIn[0], MoneyIn[1], ...]
+    // But chronologically it should be:
+    // [MoneyOut[N-1], MoneyOut[0], MoneyOut[1], ..., MoneyOut[N-3], MoneyIn[0], MoneyIn[1], ..., MoneyOut[N-2]]
+    //
+    // Translation:
+    // - LAST Money Out → Position 0 (first chronologically)
+    // - SECOND-TO-LAST Money Out → After all credits (last chronologically)
+    console.log(`\n[MONEY VALUE REORDERING] Applying positional reordering algorithm...`);
+    console.log(`Original combined order (first 10): ${allMoneyValues.slice(0, 10).map(v => `${v.amount}${v.type === 'debit' ? 'D' : 'C'}`).join(', ')}`);
 
-    // Better approach: Use balance changes to determine amounts
-    const numTransactions = Math.min(allDates.length, allDescriptions.length, allBalances.length);
-    console.log(`\nCombining ${numTransactions} transactions using balance-based matching...`);
+    // Find where credits start and end
+    const firstCreditIndex = allMoneyValues.findIndex(v => v.type === 'credit');
 
-    // The first balance corresponds to "Balance brought forward" (opening balance)
-    // Since we skip "Balance brought forward" in descriptions, we have one more balance than descriptions
-    let openingBalance: number | undefined;
-    if (allBalances.length > allDescriptions.length) {
-      // First balance is the opening balance from "Balance brought forward"
-      openingBalance = allBalances[0];
-      console.log(`Detected opening balance from 'Balance brought forward': £${openingBalance}`);
-    }
+    if (firstCreditIndex > 1) { // Need at least 2 debits before credits to apply pattern
+      // Count total debits before credits
+      const debitsBeforeCredits = firstCreditIndex;
 
-    let previousBalance: number | undefined = openingBalance;
+      console.log(`  Found ${debitsBeforeCredits} debits before credits start at position ${firstCreditIndex}`);
 
-    for (let i = 0; i < numTransactions; i++) {
-      const date = allDates[i];
-      const description = allDescriptions[i];
-      // Balance array has one extra entry (opening balance), so offset by 1
-      const balance = allBalances.length > allDescriptions.length ? allBalances[i + 1] : allBalances[i];
+      // Step 1: Move LAST debit (position N-1) before credits to position 0
+      const lastDebitBeforeCreditsPos = firstCreditIndex - 1;
+      console.log(`  Step 1: Moving debit at position ${lastDebitBeforeCreditsPos} (last before credits) to position 0`);
+      const [lastDebit] = allMoneyValues.splice(lastDebitBeforeCreditsPos, 1);
+      allMoneyValues.unshift(lastDebit);
+      console.log(`  After step 1: ${allMoneyValues.slice(0, 10).map(v => `${v.amount}${v.type === 'debit' ? 'D' : 'C'}`).join(', ')}`);
 
-      // Determine if credit or debit from transaction description
-      const lower = description.toLowerCase();
-      const isCredit = lower.includes('inward payment');
-      const isDebit = lower.includes('card purchase') ||
-                     lower.includes('outward') ||
-                     lower.includes('atm cash withdrawal') ||
-                     lower.includes('direct debit');
-
-      // Calculate amount from balance change
-      let amount = 0;
-      let type: 'credit' | 'debit' = 'debit';
-
-      if (previousBalance !== undefined && balance !== undefined) {
-        const balanceChange = balance - previousBalance;
-        amount = Math.abs(balanceChange);
-        type = balanceChange > 0 ? 'credit' : 'debit';
-      } else {
-        // No previous balance - infer type from description
-        if (isCredit) {
-          type = 'credit';
-        } else if (isDebit) {
-          type = 'debit';
-        } else if (lower.includes('account to account transfer')) {
-          type = 'credit';
+      // Step 2: Find second-to-last debit and move it to after all credits
+      // After step 1, the second-to-last is now at position (debitsBeforeCredits - 2) + 1 = debitsBeforeCredits - 1
+      if (debitsBeforeCredits >= 2) {
+        // Find where credits end
+        let lastCreditIndex = -1;
+        for (let i = allMoneyValues.length - 1; i >= 0; i--) {
+          if (allMoneyValues[i].type === 'credit') {
+            lastCreditIndex = i;
+            break;
+          }
         }
 
-        // Can't calculate amount without previous balance - skip
-        amount = 0;
+        if (lastCreditIndex !== -1) {
+          // The second-to-last debit is now at position (firstCreditIndex - 1) after the first move
+          const secondToLastDebitPos = firstCreditIndex - 1;
+          const targetPos = lastCreditIndex + 1; // After last credit
+
+          if (secondToLastDebitPos < targetPos) {
+            console.log(`  Step 2: Moving debit at position ${secondToLastDebitPos} (second-to-last) to position ${targetPos} (after credits)`);
+            const [secondToLastDebit] = allMoneyValues.splice(secondToLastDebitPos, 1);
+            allMoneyValues.splice(targetPos - 1, 0, secondToLastDebit); // -1 because we removed one element
+            console.log(`  After step 2: ${allMoneyValues.slice(0, 10).map(v => `${v.amount}${v.type === 'debit' ? 'D' : 'C'}`).join(', ')}`);
+          } else {
+            console.log(`  Step 2: Second-to-last debit already after credits, no move needed`);
+          }
+        }
       }
 
-      previousBalance = balance;
+      console.log(`  ✓ Positional reordering complete`);
+      console.log(`  Final order (first 10): ${allMoneyValues.slice(0, 10).map(v => `${v.amount}${v.type === 'debit' ? 'D' : 'C'}`).join(', ')}`);
+    } else {
+      console.log(`  ✓ No credits found or insufficient debits, no reordering needed`);
+    }
 
-      if (description && amount > 0) {
+    // Fix balance ordering issue: MUST happen AFTER money value reordering
+    // Algorithm: Use the now-reordered money values to simulate balances and find misplaced balance values
+    console.log(`\n[BALANCE REORDERING] Checking for misplaced balance values using reordered money values...`);
+    console.log(`Original balance order (first 10): ${allBalances.slice(0, 10).map(b => b.toFixed(2)).join(', ')}`);
+
+    // Calculate expected balance positions by simulating transactions with money values
+    const balancesWithExpectedPos: Array<{value: number, currentPos: number, expectedPos: number}> = [];
+    const usedBalanceIndices = new Set<number>();
+
+    // Start from opening balance
+    let simulatedBalance = allBalances[0]; // Opening balance (brought forward)
+    usedBalanceIndices.add(0);
+
+    for (let i = 0; i < allMoneyValues.length; i++) {
+      const moneyValue = allMoneyValues[i];
+
+      // Calculate what the balance should be after this transaction
+      if (moneyValue.type === 'credit') {
+        simulatedBalance += moneyValue.amount;
+      } else {
+        simulatedBalance -= moneyValue.amount;
+      }
+
+      // Find which balance in the array is closest to this expected value
+      let closestBalanceIdx = -1;
+      let closestDiff = Infinity;
+      for (let j = 1; j < allBalances.length; j++) {
+        if (usedBalanceIndices.has(j)) continue; // Skip already matched balances
+
+        const diff = Math.abs(allBalances[j] - simulatedBalance);
+        if (diff < closestDiff) {
+          closestDiff = diff;
+          closestBalanceIdx = j;
+        }
+      }
+
+      if (closestBalanceIdx !== -1 && closestDiff < 0.01) {
+        // Found a matching balance
+        const expectedPos = i + 1; // +1 because position 0 is opening balance
+        usedBalanceIndices.add(closestBalanceIdx);
+
+        if (closestBalanceIdx !== expectedPos) {
+          // Balance is in wrong position
+          balancesWithExpectedPos.push({
+            value: allBalances[closestBalanceIdx],
+            currentPos: closestBalanceIdx,
+            expectedPos: expectedPos
+          });
+          console.log(`  Detected: Balance ${allBalances[closestBalanceIdx].toFixed(2)} at position ${closestBalanceIdx} should be at position ${expectedPos}`);
+        }
+      }
+    }
+
+    // Apply balance corrections (reverse order to maintain indices)
+    for (const correction of balancesWithExpectedPos.reverse()) {
+      if (correction.currentPos > correction.expectedPos) {
+        console.log(`  Moving balance ${correction.value.toFixed(2)} from position ${correction.currentPos} to ${correction.expectedPos}`);
+        const [removed] = allBalances.splice(correction.currentPos, 1);
+        allBalances.splice(correction.expectedPos, 0, removed);
+      }
+    }
+
+    if (balancesWithExpectedPos.length > 0) {
+      console.log(`  ✓ Fixed ${balancesWithExpectedPos.length} balance position(s)`);
+      console.log(`New balance order (first 10): ${allBalances.slice(0, 10).map(b => b.toFixed(2)).join(', ')}`);
+    } else {
+      console.log(`  ✓ All balances appear to be in correct positions`);
+    }
+
+    // Note: Money Out/In values appear in the PDF in a specific visual order that may not
+    // match chronological order. We now have a combined array that preserves this order.
+    console.log(`\n[DEBUG] Money Out values: ${allMoneyOut.slice(0, 10).map(v => v !== null ? v : 'null').join(', ')}`);
+    console.log(`[DEBUG] Money In values: ${allMoneyIn.slice(0, 10).map(v => v !== null ? v : 'null').join(', ')}`);
+    console.log(`[DEBUG] Combined Money values (in text order): ${allMoneyValues.slice(0, 10).map(v => `${v.amount}${v.type === 'debit' ? 'D' : 'C'}`).join(', ')}\n`);
+
+    // Debug: Show first few items of each array
+    console.log(`\n[DEBUG] First 5 dates: ${allDates.slice(0, 5).join(', ')}`);
+    console.log(`[DEBUG] First 10 balances (RAW): ${allBalances.slice(0, 10).join(', ')}`);
+
+    // Check for out-of-sequence balances and try to detect issues
+    console.log(`\n[VALIDATION] Checking balance sequence for anomalies...`);
+    let anomalyDetected = false;
+    for (let i = 1; i < Math.min(10, allBalances.length); i++) {
+      const prev = allBalances[i - 1];
+      const curr = allBalances[i];
+      const diff = curr - prev;
+
+      // Check if this looks like a wrong order (e.g., goes down then up when it should be sequential)
+      if (Math.abs(diff) > prev * 0.5) { // Large jump
+        console.log(`  ⚠️  Position ${i}: ${prev} → ${curr} (change: ${diff.toFixed(2)}) - Large jump detected`);
+        anomalyDetected = true;
+      }
+    }
+
+    if (anomalyDetected) {
+      console.log(`\n⚠️  WARNING: Balance sequence appears to have anomalies!`);
+      console.log(`   This likely means the PDF columns are not aligned correctly.`);
+      console.log(`   Transaction amounts will be calculated from these (possibly incorrect) balances.\n`);
+    }
+
+    console.log(`\n[DEBUG] ALL ${allDescriptions.length} descriptions:`);
+    allDescriptions.slice(0, 10).forEach((desc, idx) => {
+      console.log(`  ${idx + 1}. "${desc.substring(0, 80)}..."`);
+    });
+    console.log(`  ... (${allDescriptions.length - 10} more)\n`);
+
+    // STRATEGY: Use balance sequence as the source of truth
+    // Metro Bank format: Date | Description | Money Out | Money In | Balance
+    // - Dates and Descriptions should match 1:1
+    // - Money Out/In are SPARSE (only show when there's a value)
+    // - Balances show for every transaction
+    // - Use balance changes to calculate amounts
+
+    const numTransactions = Math.min(allDates.length, allDescriptions.length, allBalances.length);
+    console.log(`Will process ${numTransactions} transactions based on Date/Description/Balance alignment\n`);
+
+    // Check if there's a "Balance brought forward" opening balance
+    let openingBalance: number | undefined;
+    let balanceOffset = 0;
+    let dateOffset = 0;
+
+    if (allBalances.length > allDescriptions.length) {
+      // First balance is the opening balance (Balance brought forward)
+      // Descriptions array has "Balance brought forward" removed (it's skipped in parsing)
+      // Dates array might include a date for "Balance brought forward" or might not
+      // Balances array includes the opening balance
+
+      openingBalance = allBalances[0];
+      balanceOffset = 1;
+      console.log(`📊 Opening balance detected: £${openingBalance.toFixed(2)}\n`);
+
+      // Check if dates array also has an extra entry for brought forward
+      if (allDates.length > allDescriptions.length) {
+        dateOffset = 1;
+        console.log(`   Dates array includes date for brought forward (will use dateOffset=1)\n`);
+
+        // Add opening balance transaction using the dedicated date
+        transactions.push({
+          date: allDates[0],
+          description: 'Balance brought forward',
+          amount: 0,
+          balance: openingBalance,
+          type: 'brought_forward',
+        });
+      } else {
+        console.log(`   Dates array does NOT include extra date for brought forward (dateOffset=0)\n`);
+        console.log(`   Will use first transaction date for brought forward\n`);
+
+        // Dates don't have an extra entry, so use the first transaction's date
+        // This means brought forward shares the same date as the first transaction
+        if (allDates.length > 0) {
+          transactions.push({
+            date: allDates[0],
+            description: 'Balance brought forward',
+            amount: 0,
+            balance: openingBalance,
+            type: 'brought_forward',
+          });
+        }
+      }
+    }
+
+    // Use Money Out/In values directly since balance columns may be misaligned across pages
+    console.log(`========== ASSEMBLING TRANSACTIONS ==========`);
+    console.log(`Strategy: Use combined Money values array (preserves text order with interleaved debits/credits)\n`);
+    console.log(`Available: ${allMoneyValues.length} combined money values\n`);
+
+    let moneyValueIndex = 0;
+
+    for (let i = 0; i < numTransactions; i++) {
+      const date = allDates[i + dateOffset];
+      const description = allDescriptions[i];
+      const balance = allBalances[i + balanceOffset];
+
+      // Determine transaction type from description
+      let type: 'credit' | 'debit' = 'debit';
+      let amount = 0;
+      let amountSource = 'unknown';
+
+      const lower = description?.toLowerCase() || '';
+
+      // Determine if this is a credit or debit from description
+      if (lower.includes('inward payment') || lower.includes('inward faster payment')) {
+        type = 'credit';
+      } else if (lower.includes('account to account transfer') && lower.includes('newman')) {
+        // For Account to Account Transfer, check balance change to determine direction
+        const prevBalance = i === 0 ? openingBalance : allBalances[(i - 1) + balanceOffset];
+        if (prevBalance !== undefined && balance !== undefined) {
+          type = (balance > prevBalance) ? 'credit' : 'debit';
+        } else {
+          type = 'credit'; // Default to credit for Newman transfers
+        }
+      } else if (lower.includes('outward') ||
+                 lower.includes('card purchase') ||
+                 lower.includes('atm cash withdrawal') ||
+                 lower.includes('direct debit')) {
+        type = 'debit';
+      } else {
+        // Unknown - use balance change if available
+        const prevBalance = i === 0 ? openingBalance : allBalances[(i - 1) + balanceOffset];
+        if (prevBalance !== undefined && balance !== undefined) {
+          type = (balance >= prevBalance) ? 'credit' : 'debit';
+        }
+      }
+
+      // Get amount from combined money values array
+      // This preserves the order as values appear in PDF (with interleaved debits/credits)
+      if (moneyValueIndex < allMoneyValues.length) {
+        const moneyValue = allMoneyValues[moneyValueIndex];
+
+        // Check if the type matches what we determined from the description
+        if (moneyValue.type === type) {
+          // Type matches - use this value
+          amount = moneyValue.amount;
+          amountSource = 'combined_array_matched';
+          moneyValueIndex++;
+        } else {
+          // Type mismatch - look ahead for a matching type (within next 2 values)
+          let found = false;
+          for (let lookAhead = 0; lookAhead < Math.min(2, allMoneyValues.length - moneyValueIndex); lookAhead++) {
+            const candidateValue = allMoneyValues[moneyValueIndex + lookAhead];
+            if (candidateValue.type === type) {
+              amount = candidateValue.amount;
+              amountSource = 'combined_array_lookahead';
+              moneyValueIndex++;
+              found = true;
+              break;
+            }
+          }
+          if (!found) {
+            // Use the value anyway but log the mismatch
+            amount = moneyValue.amount;
+            amountSource = 'combined_array_type_mismatch';
+            moneyValueIndex++;
+          }
+        }
+      } else {
+        // No more money values - fallback to balance calculation
+        const prevBalance = i === 0 ? openingBalance : allBalances[(i - 1) + balanceOffset];
+        if (prevBalance !== undefined && balance !== undefined) {
+          amount = Math.abs(balance - prevBalance);
+          amountSource = 'balance_change_fallback';
+        } else {
+          amount = 0;
+          amountSource = 'no_data';
+        }
+      }
+
+      // Calculate expected balance by tracking running total
+      let expectedBalance: number;
+      if (transactions.length === 0) {
+        // First transaction after brought forward
+        expectedBalance = openingBalance !== undefined ? openingBalance : 0;
+      } else {
+        // Get previous transaction's balance
+        const prevTransaction = transactions[transactions.length - 1];
+        expectedBalance = prevTransaction.balance !== undefined ? prevTransaction.balance : 0;
+      }
+
+      // Apply this transaction's amount to get expected balance
+      if (type === 'credit') {
+        expectedBalance += amount;
+      } else {
+        expectedBalance -= amount;
+      }
+
+      // Use the balance from PDF, but mark if it doesn't match expected
+      const pdfBalance = balance;
+      const balanceMismatch = pdfBalance !== undefined && Math.abs(pdfBalance - expectedBalance) > 0.01;
+
+      // Only add transaction if we have valid data
+      if (date && description && amount > 0) {
         transactions.push({
           date,
           description,
-          amount: amount > 0 ? amount : 0.01, // Temporary small amount if we couldn't calculate
-          balance,
+          amount,
+          balance: pdfBalance !== undefined ? pdfBalance : expectedBalance, // Use PDF balance if available
           type,
+          balanceMismatch,
+          expectedBalance,
         });
 
-        if (transactions.length <= 5) {
-          console.log(`✓ ${date} | ${description.substring(0, 40)} | ${type} £${amount.toFixed(2)} | Bal: ${balance}`);
+        // Log first 10 transactions for debugging
+        if (transactions.length <= 10) {
+          const typeSymbol = type === 'credit' ? '▲' : '▼';
+          const mismatchWarning = balanceMismatch ? '⚠️ MISMATCH' : '✓';
+          console.log(`[${String(i + 1).padStart(2)}] ${typeSymbol} ${date.padEnd(12)} | ${description.substring(0, 30).padEnd(30)} | ${type.toUpperCase().padEnd(6)} £${amount.toFixed(2).padStart(8)} | PDF: £${pdfBalance?.toFixed(2).padStart(8) || 'N/A    '} | Expected: £${expectedBalance.toFixed(2).padStart(8)} ${mismatchWarning} [${amountSource}]`);
         }
+      } else {
+        console.log(`[${String(i + 1).padStart(2)}] ⚠️  SKIPPED - date=${date ? '✓' : '✗'} desc=${description ? '✓' : '✗'} amount=${amount.toFixed(2)}`);
       }
     }
 
+    console.log(`=================================================\n`);
+
     console.log(`\nExtracted ${transactions.length} Metro Bank transactions`);
     return transactions;
+  }
+
+  /**
+   * Extract Metro Bank transactions using coordinate-based parsing
+   * This method uses X,Y coordinates to reconstruct the table structure
+   * and handles chaotic text ordering in Metro Bank PDFs
+   */
+  private async extractMetroBankTransactionsCoordinate(buffer: Buffer, parsedText: string): Promise<Transaction[]> {
+    try {
+      // Use the coordinate-based parser which handles chaotic text ordering
+      // Pass parsed text for dates/descriptions, use coordinates for amounts/balances
+      const transactions = await this.metroBankParser.parseMetroBankStatement(buffer, parsedText, false);
+      return transactions;
+    } catch (error) {
+      console.error('⚠️  Coordinate-based Metro Bank parser failed, falling back to text-based parser:', error);
+      // Fallback to old text-based parser if coordinate parsing fails
+      return this.extractMetroBankTransactions(parsedText);
+    }
   }
 
   // Extract transactions from Revolut bank statements

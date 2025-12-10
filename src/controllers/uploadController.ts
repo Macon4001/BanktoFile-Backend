@@ -108,6 +108,7 @@ export class UploadController {
           success: true,
           csv, // For preview
           xlsx: xlsxBuffer.toString('base64'), // For download
+          transactions: parsedData.transactions, // Include structured transaction data
           rawContent,
           transactionCount: parsedData.transactions.length,
           metadata: parsedData.metadata,
@@ -120,6 +121,7 @@ export class UploadController {
         res.status(200).json({
           success: true,
           csv,
+          transactions: parsedData.transactions, // Include structured transaction data
           rawContent,
           transactionCount: parsedData.transactions.length,
           metadata: parsedData.metadata,

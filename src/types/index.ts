@@ -4,6 +4,8 @@ export interface Transaction {
   amount: number;
   balance?: number;
   type?: string;
+  balanceMismatch?: boolean;
+  expectedBalance?: number;
 }
 
 export interface ParsedStatement {

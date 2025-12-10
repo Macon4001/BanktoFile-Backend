@@ -1,5 +1,5 @@
 import { Readable } from "stream";
-import csvParser from "csv-parser";
+import csvParserModule from "csv-parser";
 import { Transaction, ParsedStatement } from "../types/index.js";
 
 export class CSVParser {
@@ -9,7 +9,7 @@ export class CSVParser {
       const stream = Readable.from(buffer);
 
       stream
-        .pipe(csvParser())
+        .pipe(csvParserModule())
         .on("data", (row: Record<string, string>) => {
           try {
             // Try to map common CSV column names to our transaction structure
