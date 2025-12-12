@@ -1,12 +1,15 @@
 import * as pdfParse from "pdf-parse";
 import { Transaction, ParsedStatement } from "../types/index.js";
 import { MetroBankCoordinateParser } from "./metroBankCoordinateParser.js";
+import { GenericCoordinateParser } from "./genericCoordinateParser.js";
 
 export class PDFParser {
   private metroBankParser: MetroBankCoordinateParser;
+  private genericCoordinateParser: GenericCoordinateParser;
 
   constructor() {
     this.metroBankParser = new MetroBankCoordinateParser();
+    this.genericCoordinateParser = new GenericCoordinateParser();
   }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean }> {
     try {
@@ -44,17 +47,49 @@ export class PDFParser {
       }
 
       // Extract transactions from the PDF text (for other banks)
-      const transactions = this.extractTransactions(text);
+      let transactions = this.extractTransactions(text);
 
-      console.log(`Extracted ${transactions.length} transactions`); // Debug log
+      console.log(`Extracted ${transactions.length} transactions using text-based parsing`); // Debug log
       if (transactions.length > 0) {
         console.log("First transaction:", transactions[0]);
       }
 
-      // If no transactions found despite having text, might still need OCR
+      // Check if transactions look valid (proper date format)
+      const hasValidTransactions = transactions.some(t => {
+        // Valid date should have month name (most reliable)
+        const hasMonthName = /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/i.test(t.date);
+
+        // OR a numeric date with reasonable day/month values (not sort codes like 12-34-56)
+        let isValidNumericDate = false;
+        const numericMatch = t.date.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+        if (numericMatch) {
+          const day = parseInt(numericMatch[1]);
+          const month = parseInt(numericMatch[2]);
+          // Reasonable ranges: day 1-31, month 1-12 (not 34, 56, etc.)
+          isValidNumericDate = (day >= 1 && day <= 31) && (month >= 1 && month <= 12);
+        }
+
+        return hasMonthName || isValidNumericDate;
+      });
+
+      // If text-based parsing failed or produced invalid results, try coordinate-based fallback
+      if ((transactions.length === 0 || !hasValidTransactions) && text.length > 100) {
+        console.log("⚠️  Text-based parsing failed or produced invalid transactions - trying coordinate-based fallback");
+        try {
+          const coordinateTransactions = await this.genericCoordinateParser.parseStatement(buffer, false);
+          if (coordinateTransactions.length > 0) {
+            transactions = coordinateTransactions;
+            console.log(`✓ Coordinate-based fallback extracted ${transactions.length} transactions`);
+          }
+        } catch (error) {
+          console.error("Coordinate-based fallback also failed:", error);
+        }
+      }
+
+      // If still no transactions found despite having text, might need OCR
       const needsOCR = transactions.length === 0 && text.length > 0;
       if (needsOCR) {
-        console.log("⚠️  No transactions found in text - might need OCR fallback");
+        console.log("⚠️  No transactions found - might need OCR fallback");
       }
 
       return {

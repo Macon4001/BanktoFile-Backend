@@ -6,6 +6,7 @@ export interface Transaction {
   type?: string;
   balanceMismatch?: boolean;
   expectedBalance?: number;
+  isOpeningBalance?: boolean; // Mark opening balance / balance brought forward
 }
 
 export interface ParsedStatement {

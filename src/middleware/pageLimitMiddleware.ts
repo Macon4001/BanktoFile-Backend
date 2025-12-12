@@ -3,12 +3,10 @@ import { db } from '../db/postgres.js';
 import pdf from 'pdf-parse';
 
 // Extend Express Request to include user info
-declare global {
-  namespace Express {
-    interface Request {
-      userId?: string;
-      pagesInFile?: number;
-    }
+declare module 'express-serve-static-core' {
+  interface Request {
+    userId?: string;
+    pagesInFile?: number;
   }
 }
 
@@ -46,9 +44,9 @@ export async function countPagesMiddleware(req: Request, res: Response, next: Ne
  */
 export async function checkPageLimitMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
-    // DEVELOPMENT MODE: Skip database check if DATABASE_URL is not set
-    if (!process.env.DATABASE_URL) {
-      console.log('⚠️  Database not configured - skipping page limit checks (development mode)');
+    // DEVELOPMENT MODE: Skip limits if explicitly disabled or DATABASE_URL is not set
+    if (process.env.DISABLE_LIMITS === 'true' || !process.env.DATABASE_URL) {
+      console.log('⚠️  Page limit checks disabled (development mode)');
       req.userId = 'dev-user';
       req.pagesInFile = req.pagesInFile || 1;
       return next();
@@ -131,6 +129,7 @@ export function logConversionMiddleware(req: Request, res: Response, next: NextF
   const originalJson = res.json.bind(res);
 
   // Override res.json to intercept successful responses
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   res.json = function (body: any): Response {
     // Only log if response was successful
     if (res.statusCode >= 200 && res.statusCode < 300 && body.success !== false) {
