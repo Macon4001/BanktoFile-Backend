@@ -14,6 +14,7 @@ import blogRoutes from "./routes/blog.js";
 import contactRoutes from "./routes/contact.js";
 import bankRequestRoutes from "./routes/bankRequest.js";
 import sitemapRoutes from "./routes/sitemap.js";
+import eventsRoutes from "./routes/events.js";
 import { ocrService } from "./services/ocrService.js";
 
 // Get __dirname equivalent in ES modules
@@ -69,6 +70,7 @@ app.use("/api/stripe", stripeRoutes);
 app.use("/api/blog", blogRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/bank-request", bankRequestRoutes);
+app.use("/api/events", eventsRoutes);
 
 // Sitemap and SEO routes
 app.use("/", sitemapRoutes);

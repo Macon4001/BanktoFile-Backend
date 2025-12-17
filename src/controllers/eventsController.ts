@@ -1,0 +1,160 @@
+import { Request, Response } from 'express';
+import { eventsService } from '../services/eventsService.js';
+
+export class EventsController {
+  /**
+   * POST /api/events
+   * Create a new event
+   */
+  async createEvent(req: Request, res: Response): Promise<void> {
+    try {
+      const { session_id, event_name, metadata } = req.body;
+
+      // Validate required fields
+      if (!session_id || !event_name) {
+        res.status(400).json({
+          success: false,
+          error: 'session_id and event_name are required',
+        });
+        return;
+      }
+
+      // Validate event_name format (alphanumeric and underscore only)
+      if (!/^[a-z0-9_]+$/.test(event_name)) {
+        res.status(400).json({
+          success: false,
+          error: 'event_name must contain only lowercase letters, numbers, and underscores',
+        });
+        return;
+      }
+
+      const event = await eventsService.createEvent(
+        session_id,
+        event_name,
+        metadata
+      );
+
+      res.status(201).json({
+        success: true,
+        event,
+      });
+    } catch (error) {
+      console.error('Error creating event:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to create event',
+      });
+    }
+  }
+
+  /**
+   * GET /api/admin/events/summary
+   * Get event counts grouped by event_name for today, this week, and all time
+   */
+  async getEventSummary(req: Request, res: Response): Promise<void> {
+    try {
+      const summary = await eventsService.getEventSummary();
+
+      res.status(200).json({
+        success: true,
+        summary,
+      });
+    } catch (error) {
+      console.error('Error fetching event summary:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch event summary',
+      });
+    }
+  }
+
+  /**
+   * GET /api/admin/events/recent
+   * Get the last 100 events
+   */
+  async getRecentEvents(req: Request, res: Response): Promise<void> {
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
+
+      // Validate limit
+      if (limit < 1 || limit > 1000) {
+        res.status(400).json({
+          success: false,
+          error: 'limit must be between 1 and 1000',
+        });
+        return;
+      }
+
+      const events = await eventsService.getRecentEvents(limit);
+
+      res.status(200).json({
+        success: true,
+        events,
+        count: events.length,
+      });
+    } catch (error) {
+      console.error('Error fetching recent events:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch recent events',
+      });
+    }
+  }
+
+  /**
+   * GET /api/admin/events/funnel
+   * Get funnel data with percentages
+   * Funnel: page_view → upload_started → conversion_completed → payment_completed
+   */
+  async getFunnelData(req: Request, res: Response): Promise<void> {
+    try {
+      const funnelData = await eventsService.getFunnelData();
+
+      res.status(200).json({
+        success: true,
+        funnel: funnelData,
+      });
+    } catch (error) {
+      console.error('Error fetching funnel data:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch funnel data',
+      });
+    }
+  }
+
+  /**
+   * GET /api/admin/events/session/:sessionId
+   * Get all events for a specific session
+   */
+  async getEventsBySession(req: Request, res: Response): Promise<void> {
+    try {
+      const { sessionId } = req.params;
+
+      if (!sessionId) {
+        res.status(400).json({
+          success: false,
+          error: 'sessionId is required',
+        });
+        return;
+      }
+
+      const events = await eventsService.getEventsBySession(sessionId);
+
+      res.status(200).json({
+        success: true,
+        events,
+        count: events.length,
+      });
+    } catch (error) {
+      console.error('Error fetching events by session:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch events by session',
+      });
+    }
+  }
+}
+
+// Export controller instance
+export const eventsController = new EventsController();
