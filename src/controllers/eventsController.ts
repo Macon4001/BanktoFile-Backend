@@ -154,6 +154,58 @@ export class EventsController {
       });
     }
   }
+
+  /**
+   * GET /api/admin/events/timeseries
+   * Get time-series data for charts
+   */
+  async getTimeSeriesData(req: Request, res: Response): Promise<void> {
+    try {
+      const days = req.query.days ? parseInt(req.query.days as string) : 7;
+
+      if (days < 1 || days > 90) {
+        res.status(400).json({
+          success: false,
+          error: 'days must be between 1 and 90',
+        });
+        return;
+      }
+
+      const data = await eventsService.getTimeSeriesData(days);
+
+      res.status(200).json({
+        success: true,
+        data,
+      });
+    } catch (error) {
+      console.error('Error fetching time series data:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch time series data',
+      });
+    }
+  }
+
+  /**
+   * GET /api/admin/events/distribution
+   * Get event distribution for pie charts
+   */
+  async getEventDistribution(req: Request, res: Response): Promise<void> {
+    try {
+      const distribution = await eventsService.getEventDistribution();
+
+      res.status(200).json({
+        success: true,
+        distribution,
+      });
+    } catch (error) {
+      console.error('Error fetching event distribution:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch event distribution',
+      });
+    }
+  }
 }
 
 // Export controller instance

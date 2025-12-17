@@ -56,7 +56,7 @@
   "lint-staged": {
     "*.ts": [
       "eslint --fix",
-      "tsc --noEmit --skipLibCheck --esModuleInterop"
+      "tsc --noEmit --skipLibCheck --esModuleInterop --module ES2022"
     ]
   }
 }

@@ -205,6 +205,72 @@ export class EventsService {
       client.release();
     }
   }
+
+  /**
+   * Get time-series data for events (last 7 days)
+   */
+  async getTimeSeriesData(days: number = 7): Promise<Array<{ date: string; count: number; event_name?: string }>> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<{ date: string; count: string }>(
+        `SELECT
+          DATE(created_at) as date,
+          COUNT(*) as count
+         FROM events
+         WHERE created_at >= CURRENT_DATE - INTERVAL '${days} days'
+         GROUP BY DATE(created_at)
+         ORDER BY date ASC`
+      );
+
+      return result.rows.map(row => ({
+        date: row.date,
+        count: parseInt(row.count)
+      }));
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Get event distribution (pie chart data)
+   */
+  async getEventDistribution(): Promise<Array<{ event_name: string; count: number; percentage: number }>> {
+    const client = await pool.connect();
+    try {
+      // Get total count
+      const totalResult = await client.query<{ total: string }>(
+        'SELECT COUNT(*) as total FROM events WHERE created_at >= CURRENT_DATE - INTERVAL \'7 days\''
+      );
+      const total = parseInt(totalResult.rows[0].total);
+
+      if (total === 0) {
+        return [];
+      }
+
+      // Get counts by event
+      const result = await client.query<{ event_name: string; count: string }>(
+        `SELECT
+          event_name,
+          COUNT(*) as count
+         FROM events
+         WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'
+         GROUP BY event_name
+         ORDER BY count DESC
+         LIMIT 10`
+      );
+
+      return result.rows.map(row => {
+        const count = parseInt(row.count);
+        return {
+          event_name: row.event_name,
+          count,
+          percentage: Math.round((count / total) * 100 * 100) / 100
+        };
+      });
+    } finally {
+      client.release();
+    }
+  }
 }
 
 // Export singleton instance
