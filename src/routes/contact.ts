@@ -55,7 +55,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     // TODO: Send email notification to support team
     // await sendEmail({
-    //   to: 'support@banktofile.com',
+    //   to: 'Michael@banktofile.com',
     //   subject: `New Contact Form: ${subject || 'No Subject'}`,
     //   html: `
     //     <h2>New Contact Form Submission</h2>
