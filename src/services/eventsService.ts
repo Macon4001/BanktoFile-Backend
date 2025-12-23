@@ -237,11 +237,21 @@ export class EventsService {
   async getEventDistribution(): Promise<Array<{ event_name: string; count: number; percentage: number }>> {
     const client = await pool.connect();
     try {
-      // Get total count from this week
-      const totalResult = await client.query<{ total: string }>(
+      // Try to get data from last 7 days first
+      let totalResult = await client.query<{ total: string }>(
         'SELECT COUNT(*) as total FROM events WHERE created_at >= NOW() - INTERVAL \'7 days\''
       );
-      const total = parseInt(totalResult.rows[0].total);
+      let total = parseInt(totalResult.rows[0].total);
+      let whereClause = "WHERE created_at >= NOW() - INTERVAL '7 days'";
+
+      // If no data in last 7 days, get all-time data
+      if (total === 0) {
+        totalResult = await client.query<{ total: string }>(
+          'SELECT COUNT(*) as total FROM events'
+        );
+        total = parseInt(totalResult.rows[0].total);
+        whereClause = '';
+      }
 
       if (total === 0) {
         return [];
@@ -253,7 +263,7 @@ export class EventsService {
           event_name,
           COUNT(*) as count
          FROM events
-         WHERE created_at >= NOW() - INTERVAL '7 days'
+         ${whereClause}
          GROUP BY event_name
          ORDER BY count DESC
          LIMIT 10`
