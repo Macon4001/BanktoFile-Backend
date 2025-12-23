@@ -67,11 +67,11 @@ export class EventsService {
          ORDER BY count DESC`
       );
 
-      // This week's events
+      // This week's events (last 7 days)
       const weekResult = await client.query<EventSummary>(
         `SELECT event_name, COUNT(*) as count
          FROM events
-         WHERE created_at >= DATE_TRUNC('week', CURRENT_DATE)
+         WHERE created_at >= NOW() - INTERVAL '7 days'
          GROUP BY event_name
          ORDER BY count DESC`
       );
@@ -217,7 +217,7 @@ export class EventsService {
           DATE(created_at) as date,
           COUNT(*) as count
          FROM events
-         WHERE created_at >= CURRENT_DATE - INTERVAL '${days} days'
+         WHERE created_at >= NOW() - INTERVAL '${days} days'
          GROUP BY DATE(created_at)
          ORDER BY date ASC`
       );
@@ -237,9 +237,9 @@ export class EventsService {
   async getEventDistribution(): Promise<Array<{ event_name: string; count: number; percentage: number }>> {
     const client = await pool.connect();
     try {
-      // Get total count
+      // Get total count from this week
       const totalResult = await client.query<{ total: string }>(
-        'SELECT COUNT(*) as total FROM events WHERE created_at >= CURRENT_DATE - INTERVAL \'7 days\''
+        'SELECT COUNT(*) as total FROM events WHERE created_at >= NOW() - INTERVAL \'7 days\''
       );
       const total = parseInt(totalResult.rows[0].total);
 
@@ -253,7 +253,7 @@ export class EventsService {
           event_name,
           COUNT(*) as count
          FROM events
-         WHERE created_at >= CURRENT_DATE - INTERVAL '7 days'
+         WHERE created_at >= NOW() - INTERVAL '7 days'
          GROUP BY event_name
          ORDER BY count DESC
          LIMIT 10`
@@ -283,7 +283,7 @@ export class EventsService {
           DATE(created_at) as date,
           COUNT(DISTINCT session_id) as unique_sessions
          FROM events
-         WHERE created_at >= CURRENT_DATE - INTERVAL '${days} days'
+         WHERE created_at >= NOW() - INTERVAL '${days} days'
          GROUP BY DATE(created_at)
          ORDER BY date ASC`
       );
