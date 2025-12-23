@@ -124,13 +124,13 @@ export class EventsService {
 
   /**
    * Get funnel data with percentages
-   * Funnel: page_view → upload_started → conversion_completed → payment_completed
+   * Funnel: page_view → upload_started → conversion_started → conversion_completed → conversion_failed → payment_completed
    */
   async getFunnelData(): Promise<FunnelData[]> {
     const client = await pool.connect();
     try {
       // Get counts for each funnel stage
-      const funnelEvents = ['page_view', 'upload_started', 'conversion_completed', 'payment_completed'];
+      const funnelEvents = ['page_view', 'upload_started', 'conversion_started', 'conversion_completed', 'conversion_failed', 'payment_completed'];
 
       const result = await client.query<{ event_name: string; count: string }>(
         `SELECT event_name, COUNT(*) as count
@@ -267,6 +267,31 @@ export class EventsService {
           percentage: Math.round((count / total) * 100 * 100) / 100
         };
       });
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Get unique sessions over time (time-series)
+   */
+  async getUniqueSessionsTimeSeries(days: number = 7): Promise<Array<{ date: string; unique_sessions: number }>> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<{ date: string; unique_sessions: string }>(
+        `SELECT
+          DATE(created_at) as date,
+          COUNT(DISTINCT session_id) as unique_sessions
+         FROM events
+         WHERE created_at >= CURRENT_DATE - INTERVAL '${days} days'
+         GROUP BY DATE(created_at)
+         ORDER BY date ASC`
+      );
+
+      return result.rows.map(row => ({
+        date: row.date,
+        unique_sessions: parseInt(row.unique_sessions)
+      }));
     } finally {
       client.release();
     }

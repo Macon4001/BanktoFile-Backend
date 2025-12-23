@@ -13,6 +13,7 @@ router.get('/admin/recent', requireAdmin, eventsController.getRecentEvents.bind(
 router.get('/admin/funnel', requireAdmin, eventsController.getFunnelData.bind(eventsController));
 router.get('/admin/timeseries', requireAdmin, eventsController.getTimeSeriesData.bind(eventsController));
 router.get('/admin/distribution', requireAdmin, eventsController.getEventDistribution.bind(eventsController));
+router.get('/admin/unique-sessions', requireAdmin, eventsController.getUniqueSessionsTimeSeries.bind(eventsController));
 router.get('/admin/session/:sessionId', requireAdmin, eventsController.getEventsBySession.bind(eventsController));
 
 export default router;
