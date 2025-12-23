@@ -14,6 +14,9 @@ router.get('/admin/funnel', requireAdmin, eventsController.getFunnelData.bind(ev
 router.get('/admin/timeseries', requireAdmin, eventsController.getTimeSeriesData.bind(eventsController));
 router.get('/admin/distribution', requireAdmin, eventsController.getEventDistribution.bind(eventsController));
 router.get('/admin/unique-sessions', requireAdmin, eventsController.getUniqueSessionsTimeSeries.bind(eventsController));
+router.get('/admin/failed-conversions', requireAdmin, eventsController.getFailedConversions.bind(eventsController));
+router.get('/admin/failed-conversions/stats', requireAdmin, eventsController.getFailedConversionStats.bind(eventsController));
+router.get('/admin/failed-conversions/timeline', requireAdmin, eventsController.getErrorTimeSeries.bind(eventsController));
 router.get('/admin/session/:sessionId', requireAdmin, eventsController.getEventsBySession.bind(eventsController));
 
 export default router;

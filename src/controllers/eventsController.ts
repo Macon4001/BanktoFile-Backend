@@ -237,6 +237,91 @@ export class EventsController {
       });
     }
   }
+
+  /**
+   * GET /api/admin/events/failed-conversions
+   * Get paginated list of failed conversions
+   */
+  async getFailedConversions(req: Request, res: Response): Promise<void> {
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
+      const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+
+      if (limit < 1 || limit > 500) {
+        res.status(400).json({
+          success: false,
+          error: 'limit must be between 1 and 500',
+        });
+        return;
+      }
+
+      const failures = await eventsService.getFailedConversions(limit, offset);
+
+      res.status(200).json({
+        success: true,
+        data: failures,
+        count: failures.length,
+      });
+    } catch (error) {
+      console.error('Error fetching failed conversions:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch failed conversions',
+      });
+    }
+  }
+
+  /**
+   * GET /api/admin/events/failed-conversions/stats
+   * Get failed conversion statistics
+   */
+  async getFailedConversionStats(req: Request, res: Response): Promise<void> {
+    try {
+      const stats = await eventsService.getFailedConversionStats();
+
+      res.status(200).json({
+        success: true,
+        stats,
+      });
+    } catch (error) {
+      console.error('Error fetching failed conversion stats:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch failed conversion stats',
+      });
+    }
+  }
+
+  /**
+   * GET /api/admin/events/failed-conversions/timeline
+   * Get error distribution over time
+   */
+  async getErrorTimeSeries(req: Request, res: Response): Promise<void> {
+    try {
+      const days = req.query.days ? parseInt(req.query.days as string) : 7;
+
+      if (days < 1 || days > 90) {
+        res.status(400).json({
+          success: false,
+          error: 'days must be between 1 and 90',
+        });
+        return;
+      }
+
+      const data = await eventsService.getErrorTimeSeries(days);
+
+      res.status(200).json({
+        success: true,
+        data,
+      });
+    } catch (error) {
+      console.error('Error fetching error timeline:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch error timeline',
+      });
+    }
+  }
 }
 
 // Export controller instance

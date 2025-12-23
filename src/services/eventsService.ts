@@ -306,6 +306,153 @@ export class EventsService {
       client.release();
     }
   }
+
+  /**
+   * Get failed conversion events with detailed error information
+   */
+  async getFailedConversions(limit: number = 100, offset: number = 0): Promise<Array<{
+    id: string;
+    session_id: string;
+    error_message: string;
+    error_type: string;
+    file_name?: string;
+    file_size?: number;
+    created_at: Date;
+    metadata: Record<string, unknown>;
+  }>> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `SELECT
+          id,
+          session_id,
+          metadata->>'error_message' as error_message,
+          metadata->>'error_type' as error_type,
+          metadata->>'file_name' as file_name,
+          metadata->>'file_size' as file_size,
+          metadata,
+          created_at
+         FROM events
+         WHERE event_name = 'conversion_failed'
+         ORDER BY created_at DESC
+         LIMIT $1 OFFSET $2`,
+        [limit, offset]
+      );
+
+      return result.rows.map(row => ({
+        id: row.id,
+        session_id: row.session_id,
+        error_message: row.error_message || 'Unknown error',
+        error_type: row.error_type || 'Unknown',
+        file_name: row.file_name,
+        file_size: row.file_size ? parseInt(row.file_size) : undefined,
+        created_at: row.created_at,
+        metadata: row.metadata
+      }));
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Get failed conversion statistics
+   */
+  async getFailedConversionStats(): Promise<{
+    total_failures: number;
+    failures_today: number;
+    failures_this_week: number;
+    common_errors: Array<{ error_type: string; count: number }>;
+    failure_rate: number;
+  }> {
+    const client = await pool.connect();
+    try {
+      // Total failures
+      const totalResult = await client.query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM events WHERE event_name = 'conversion_failed'`
+      );
+
+      // Failures today
+      const todayResult = await client.query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM events
+         WHERE event_name = 'conversion_failed'
+         AND created_at >= CURRENT_DATE`
+      );
+
+      // Failures this week
+      const weekResult = await client.query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM events
+         WHERE event_name = 'conversion_failed'
+         AND created_at >= NOW() - INTERVAL '7 days'`
+      );
+
+      // Common errors
+      const errorsResult = await client.query<{ error_type: string; count: string }>(
+        `SELECT
+          COALESCE(metadata->>'error_type', 'Unknown') as error_type,
+          COUNT(*) as count
+         FROM events
+         WHERE event_name = 'conversion_failed'
+         GROUP BY metadata->>'error_type'
+         ORDER BY count DESC
+         LIMIT 10`
+      );
+
+      // Calculate failure rate
+      const totalConversionsResult = await client.query<{ count: string }>(
+        `SELECT COUNT(*) as count FROM events
+         WHERE event_name IN ('conversion_completed', 'conversion_failed')`
+      );
+
+      const totalConversions = parseInt(totalConversionsResult.rows[0].count);
+      const totalFailures = parseInt(totalResult.rows[0].count);
+      const failureRate = totalConversions > 0 ? (totalFailures / totalConversions) * 100 : 0;
+
+      return {
+        total_failures: totalFailures,
+        failures_today: parseInt(todayResult.rows[0].count),
+        failures_this_week: parseInt(weekResult.rows[0].count),
+        common_errors: errorsResult.rows.map(row => ({
+          error_type: row.error_type,
+          count: parseInt(row.count)
+        })),
+        failure_rate: Math.round(failureRate * 100) / 100
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Get error distribution over time (success vs failure)
+   */
+  async getErrorTimeSeries(days: number = 7): Promise<Array<{
+    date: string;
+    failed_count: number;
+    success_count: number;
+  }>> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<{ date: string; failed_count: string; success_count: string }>(
+        `SELECT
+          DATE(created_at) as date,
+          COUNT(*) FILTER (WHERE event_name = 'conversion_failed') as failed_count,
+          COUNT(*) FILTER (WHERE event_name = 'conversion_completed') as success_count
+         FROM events
+         WHERE event_name IN ('conversion_failed', 'conversion_completed')
+         AND created_at >= NOW() - INTERVAL '${days} days'
+         GROUP BY DATE(created_at)
+         ORDER BY date ASC`
+      );
+
+      return result.rows.map(row => ({
+        date: row.date,
+        failed_count: parseInt(row.failed_count) || 0,
+        success_count: parseInt(row.success_count) || 0
+      }));
+    } finally {
+      client.release();
+    }
+  }
 }
 
 // Export singleton instance
