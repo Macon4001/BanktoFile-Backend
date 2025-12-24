@@ -109,6 +109,21 @@ export interface BankRequestStats {
   completed_count: number;
 }
 
+export interface Feedback {
+  id: number;
+  session_id?: string | null;
+  rating: 'positive' | 'negative';
+  comment?: string | null;
+  bank_name?: string | null;
+  created_at: Date;
+}
+
+export interface FeedbackSummary {
+  positive_count: number;
+  negative_count: number;
+  total_count: number;
+}
+
 // Create connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -900,6 +915,90 @@ export class PostgresStore {
         [id]
       );
       return (result.rowCount ?? 0) > 0;
+    } finally {
+      client.release();
+    }
+  }
+
+  // ===== Feedback Methods =====
+
+  // Create new feedback
+  async createFeedback(data: {
+    sessionId?: string | null;
+    rating: 'positive' | 'negative';
+    comment?: string | null;
+    bankName?: string | null;
+  }): Promise<Feedback> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<Feedback>(
+        `INSERT INTO feedback (session_id, rating, comment, bank_name)
+         VALUES ($1, $2, $3, $4)
+         RETURNING *`,
+        [data.sessionId || null, data.rating, data.comment || null, data.bankName || null]
+      );
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get all feedback with optional date filtering
+  async getAllFeedback(dateFilter?: 'today' | 'week' | 'all'): Promise<Feedback[]> {
+    const client = await pool.connect();
+    try {
+      let query = 'SELECT * FROM feedback';
+      const params: string[] = [];
+
+      if (dateFilter === 'today') {
+        query += ' WHERE created_at >= CURRENT_DATE';
+      } else if (dateFilter === 'week') {
+        query += ' WHERE created_at >= CURRENT_DATE - INTERVAL \'7 days\'';
+      }
+
+      query += ' ORDER BY created_at DESC';
+
+      const result = await client.query<Feedback>(query, params);
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get feedback summary with counts
+  async getFeedbackSummary(dateFilter?: 'today' | 'week' | 'all'): Promise<FeedbackSummary> {
+    const client = await pool.connect();
+    try {
+      let query = `
+        SELECT
+          COUNT(*) FILTER (WHERE rating = 'positive') as positive_count,
+          COUNT(*) FILTER (WHERE rating = 'negative') as negative_count,
+          COUNT(*) as total_count
+        FROM feedback
+      `;
+
+      if (dateFilter === 'today') {
+        query += ' WHERE created_at >= CURRENT_DATE';
+      } else if (dateFilter === 'week') {
+        query += ' WHERE created_at >= CURRENT_DATE - INTERVAL \'7 days\'';
+      }
+
+      const result = await client.query<FeedbackSummary>(query);
+      return result.rows[0] || { positive_count: 0, negative_count: 0, total_count: 0 };
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get recent feedback (last N items)
+  async getRecentFeedback(limit: number = 20): Promise<Feedback[]> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<Feedback>(
+        'SELECT * FROM feedback ORDER BY created_at DESC LIMIT $1',
+        [limit]
+      );
+      return result.rows;
     } finally {
       client.release();
     }
