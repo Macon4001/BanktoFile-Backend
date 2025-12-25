@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { supportService } from '../services/supportService';
-import { sendSupportRequestEmail } from '../services/emailService';
+import { supportService } from '../services/supportService.js';
+import { sendSupportRequestEmail } from '../services/emailService.js';
 
 /**
  * Create a new support request (public endpoint)

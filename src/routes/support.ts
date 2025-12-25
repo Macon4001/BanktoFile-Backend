@@ -7,7 +7,7 @@ import {
   updateSupportRequestStatus,
   getSummaryStats,
   deleteSupportRequest,
-} from '../controllers/supportController';
+} from '../controllers/supportController.js';
 import { requireAdmin } from '../middleware/adminAuth.js';
 
 const router = express.Router();
