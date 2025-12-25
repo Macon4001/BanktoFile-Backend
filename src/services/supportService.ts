@@ -1,4 +1,4 @@
-import pool from '../config/database';
+import { pool } from '../db/postgres.js';
 
 interface CreateSupportRequestParams {
   sessionId?: string;
@@ -185,7 +185,7 @@ export const supportService = {
     ]);
 
     const byIssueType: Record<string, number> = {};
-    issueTypeResult.rows.forEach((row) => {
+    issueTypeResult.rows.forEach((row: { issue_type: string; count: string }) => {
       byIssueType[row.issue_type] = parseInt(row.count);
     });
 

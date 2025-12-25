@@ -8,7 +8,7 @@ import {
   getSummaryStats,
   deleteSupportRequest,
 } from '../controllers/supportController';
-import { requireAdmin } from '../middleware/auth';
+import { requireAdmin } from '../middleware/adminAuth.js';
 
 const router = express.Router();
 
