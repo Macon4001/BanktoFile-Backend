@@ -16,6 +16,7 @@ import bankRequestRoutes from "./routes/bankRequest.js";
 import sitemapRoutes from "./routes/sitemap.js";
 import eventsRoutes from "./routes/events.js";
 import feedbackRoutes from "./routes/feedback.js";
+import supportRoutes from "./routes/support.js";
 import { ocrService } from "./services/ocrService.js";
 
 // Get __dirname equivalent in ES modules
@@ -73,6 +74,7 @@ app.use("/api/contact", contactRoutes);
 app.use("/api/bank-request", bankRequestRoutes);
 app.use("/api/events", eventsRoutes);
 app.use("/api", feedbackRoutes);
+app.use("/api/support", supportRoutes);
 
 // Sitemap and SEO routes
 app.use("/", sitemapRoutes);

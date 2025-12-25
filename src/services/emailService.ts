@@ -296,3 +296,229 @@ Need help? Reply to this email and we'll get back to you.
     throw error;
   }
 }
+
+interface SupportRequestEmailData {
+  id: number;
+  issueType: string;
+  errorType?: string;
+  errorMessage?: string;
+  description: string;
+  userEmail: string;
+  sessionId?: string;
+  contextData?: Record<string, unknown>;
+}
+
+/**
+ * Send email notification to admin about new support request
+ */
+export async function sendSupportRequestEmail(data: SupportRequestEmailData): Promise<void> {
+  const transporter = createTransporter();
+
+  if (!transporter) {
+    console.warn('Skipping admin email - email service not configured');
+    return;
+  }
+
+  const adminEmail = 'michael@banktofile.com';
+
+  const issueTypeLabels: Record<string, string> = {
+    general: '💬 General Question',
+    upload_error: '📤 Upload Error',
+    conversion_error: '⚙️ Conversion Error',
+    download_error: '📥 Download Error',
+    payment_error: '💳 Payment Error',
+    other: '❓ Other Issue',
+  };
+
+  const issueLabel = issueTypeLabels[data.issueType] || data.issueType;
+
+  const emailHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+          line-height: 1.6;
+          color: #333;
+          max-width: 600px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+        .header {
+          background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
+          color: white;
+          padding: 30px 20px;
+          border-radius: 10px 10px 0 0;
+          text-align: center;
+        }
+        .content {
+          background: #f9fafb;
+          padding: 30px 20px;
+          border-radius: 0 0 10px 10px;
+        }
+        .info-row {
+          background: white;
+          padding: 15px;
+          margin: 10px 0;
+          border-radius: 5px;
+          border-left: 4px solid #dc2626;
+        }
+        .error-box {
+          background: #fef2f2;
+          padding: 15px;
+          margin: 10px 0;
+          border-radius: 5px;
+          border-left: 4px solid #dc2626;
+          font-family: monospace;
+          font-size: 12px;
+        }
+        .label {
+          font-weight: 600;
+          color: #dc2626;
+          margin-bottom: 5px;
+        }
+        .value {
+          color: #333;
+        }
+        .description {
+          background: #fffbeb;
+          padding: 15px;
+          margin: 15px 0;
+          border-radius: 5px;
+          border-left: 4px solid #f59e0b;
+        }
+        .footer {
+          margin-top: 20px;
+          padding-top: 20px;
+          border-top: 1px solid #e5e7eb;
+          color: #6b7280;
+          font-size: 14px;
+        }
+        .button {
+          display: inline-block;
+          background: #16a34a;
+          color: white;
+          padding: 12px 24px;
+          text-decoration: none;
+          border-radius: 6px;
+          margin: 10px 5px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1 style="margin: 0;">🚨 New Support Request</h1>
+        <p style="margin: 10px 0 0 0; opacity: 0.9;">Request #${data.id}</p>
+      </div>
+      <div class="content">
+        <div class="info-row">
+          <div class="label">Issue Type</div>
+          <div class="value">${issueLabel}</div>
+        </div>
+
+        <div class="info-row">
+          <div class="label">User Email</div>
+          <div class="value"><a href="mailto:${data.userEmail}">${data.userEmail}</a></div>
+        </div>
+
+        ${data.sessionId ? `
+        <div class="info-row">
+          <div class="label">Session ID</div>
+          <div class="value">${data.sessionId}</div>
+        </div>
+        ` : ''}
+
+        <div class="description">
+          <div class="label">User Description</div>
+          <div class="value">${data.description.replace(/\n/g, '<br>')}</div>
+        </div>
+
+        ${data.errorType ? `
+        <div class="error-box">
+          <div class="label">Error Type</div>
+          <div class="value">${data.errorType}</div>
+        </div>
+        ` : ''}
+
+        ${data.errorMessage ? `
+        <div class="error-box">
+          <div class="label">Error Message</div>
+          <div class="value">${data.errorMessage}</div>
+        </div>
+        ` : ''}
+
+        ${data.contextData && Object.keys(data.contextData).length > 0 ? `
+        <div class="info-row">
+          <div class="label">Additional Context</div>
+          <div class="value">
+            <pre style="margin: 0; font-size: 11px; overflow-x: auto;">${JSON.stringify(data.contextData, null, 2)}</pre>
+          </div>
+        </div>
+        ` : ''}
+
+        <div class="info-row">
+          <div class="label">Submitted</div>
+          <div class="value">${new Date().toLocaleString('en-GB', {
+            dateStyle: 'full',
+            timeStyle: 'short'
+          })}</div>
+        </div>
+
+        <div style="text-align: center; margin-top: 20px;">
+          <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/support" class="button">
+            View in Dashboard
+          </a>
+          <a href="mailto:${data.userEmail}" class="button" style="background: #2563eb;">
+            Reply to User
+          </a>
+        </div>
+
+        <div class="footer">
+          <p><strong>Next Steps:</strong></p>
+          <ol>
+            <li>Review the error details and context</li>
+            <li>Check analytics for session ID: <code>${data.sessionId || 'N/A'}</code></li>
+            <li>Investigate and resolve the issue</li>
+            <li>Reply to <strong>${data.userEmail}</strong> with solution</li>
+            <li>Update status in admin dashboard</li>
+          </ol>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  try {
+    await transporter.sendMail({
+      from: `"Bank to File Support" <${process.env.BREVO_SMTP_USER}>`,
+      to: adminEmail,
+      subject: `🚨 Support Request #${data.id}: ${issueLabel}`,
+      html: emailHtml,
+      text: `
+New Support Request #${data.id}
+
+Issue Type: ${issueLabel}
+User Email: ${data.userEmail}
+${data.sessionId ? `Session ID: ${data.sessionId}` : ''}
+
+User Description:
+${data.description}
+
+${data.errorType ? `Error Type: ${data.errorType}` : ''}
+${data.errorMessage ? `Error Message: ${data.errorMessage}` : ''}
+
+${data.contextData ? `Context: ${JSON.stringify(data.contextData, null, 2)}` : ''}
+
+Submitted: ${new Date().toLocaleString()}
+
+Reply to: ${data.userEmail}
+      `.trim()
+    });
+
+    console.log(`✅ Support request email sent to admin for request #${data.id}`);
+  } catch (error) {
+    console.error('❌ Failed to send support request email:', error);
+    throw error;
+  }
+}
