@@ -46,6 +46,18 @@ export class PDFParser {
         };
       }
 
+      // Check if this is an HSBC statement - use coordinate-based parser
+      // HSBC PDFs also have chaotic text ordering similar to Metro Bank
+      if (text.includes("HSBC") || text.includes("HBUKGB") || text.includes("www.hsbc.co.uk")) {
+        console.log("Detected HSBC statement - using coordinate-based parser");
+        const transactions = await this.extractHSBCTransactionsCoordinate(buffer, text);
+        return {
+          transactions,
+          metadata: this.extractMetadata(text),
+          rawText: text,
+        };
+      }
+
       // Extract transactions from the PDF text (for other banks)
       let transactions = this.extractTransactions(text);
 
@@ -178,11 +190,7 @@ export class PDFParser {
       return this.extractRevolutTransactions(text);
     }
 
-    // Check if this is an HSBC statement
-    if (text.includes("HSBC") || text.includes("HBUKGB") || text.includes("www.hsbc.co.uk")) {
-      console.log("Detected HSBC bank statement");
-      return this.extractHSBCTransactions(text);
-    }
+    // Note: HSBC detection moved to parsePDF() method to use coordinate-based parser
 
     // Common date patterns (non-global for better matching)
     const datePatterns = [
@@ -2839,6 +2847,26 @@ export class PDFParser {
       console.error('⚠️  Coordinate-based Metro Bank parser failed, falling back to text-based parser:', error);
       // Fallback to old text-based parser if coordinate parsing fails
       return this.extractMetroBankTransactions(parsedText);
+    }
+  }
+
+  private async extractHSBCTransactionsCoordinate(buffer: Buffer, parsedText: string): Promise<Transaction[]> {
+    try {
+      // Use the generic coordinate-based parser which handles chaotic text ordering
+      // HSBC PDFs have similar issues to Metro Bank - text extraction is scrambled
+      console.log('Using coordinate-based parser for HSBC statement...');
+      const transactions = await this.genericCoordinateParser.parseStatement(buffer, false);
+
+      if (transactions.length === 0) {
+        console.log('⚠️  Coordinate parser returned 0 transactions, falling back to text-based parser');
+        return this.extractHSBCTransactions(parsedText);
+      }
+
+      return transactions;
+    } catch (error) {
+      console.error('⚠️  Coordinate-based HSBC parser failed, falling back to text-based parser:', error);
+      // Fallback to text-based parser if coordinate parsing fails
+      return this.extractHSBCTransactions(parsedText);
     }
   }
 
