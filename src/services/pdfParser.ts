@@ -1130,19 +1130,35 @@ export class PDFParser {
   private processNationwideLine(line: string, currentDate: string, transactions: Transaction[]): void {
     // Nationwide format: "Description Out In Balance" or "Description Amount Balance"
     // Extract all numbers - but filter out account numbers and reference numbers
-    const allNumbers = line.match(/[\d,]+\.?\d{0,2}/g);
+    // Match numbers with period OR comma as decimal separator (e.g., 14.71 or 14,71)
+    const allNumbers = line.match(/[\d,]+[.,]\d{1,2}|[\d,]+/g);
 
-    if (!allNumbers || allNumbers.length === 0) return;
+    if (!allNumbers || allNumbers.length === 0) {
+      // No numbers on this line - could be continuation of multi-line description
+      // Don't skip it completely, just return for now
+      return;
+    }
 
-    // Filter to get only monetary amounts (must have decimal points)
+    // Filter to get only monetary amounts (must have decimal separator: . or ,)
     // Account numbers are typically 6-8 digits without decimals (071660, 60408617)
     // Reference numbers can be very long without decimals (33212269001)
-    // Transaction amounts ALWAYS have decimal points (34.72, 1485.99, 2000.00)
-    const numbers = allNumbers.filter(num => num.includes('.'));
+    // Transaction amounts have decimal separators (34.72, 1485.99, 2000.00, or 14,71)
+    const numbers = allNumbers.filter(num => num.includes('.') || num.includes(','));
 
     if (numbers.length === 0) return;
 
-    const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
+    const amounts = numbers.map(n => {
+      // Handle both comma and period as decimal separator
+      // If last comma/period has 2 digits after it, it's a decimal separator
+      // Replace commas with periods for parseFloat
+      if (n.includes(',') && !n.includes('.')) {
+        // European format: 14,71 -> 14.71
+        return parseFloat(n.replace(',', '.'));
+      } else {
+        // UK/US format: 1,234.56 -> remove commas from thousands
+        return parseFloat(n.replace(/,/g, ''));
+      }
+    });
 
     // Find where the first monetary amount appears (not account number)
     const firstNumberIndex = line.indexOf(numbers[0]);
