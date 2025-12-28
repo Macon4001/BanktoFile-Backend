@@ -3110,6 +3110,7 @@ export class PDFParser {
     // Start with first date found
     let currentDate = allDates.length > 0 ? allDates[0] : '';
     let currentDateIndex = 0;
+    let hasSeenBroughtForward = false; // Only add first BROUGHT FORWARD
 
     // Parse line by line
     for (let i = 0; i < lines.length; i++) {
@@ -3158,27 +3159,33 @@ export class PDFParser {
         continue;
       }
 
-      // Handle BALANCE BROUGHT FORWARD
+      // Handle BALANCE BROUGHT FORWARD (only add first occurrence - skip page breaks)
       if (line.includes('BALANCE BROUGHT FORWARD')) {
-        const balanceMatch = line.match(/([\d,]+\.?\d{0,2})$/);
-        if (balanceMatch && currentDate) {
-          const balance = parseFloat(balanceMatch[1].replace(/,/g, ''));
+        if (!hasSeenBroughtForward) {
+          const balanceMatch = line.match(/([\d,]+\.?\d{0,2})$/);
+          if (balanceMatch && currentDate) {
+            const balance = parseFloat(balanceMatch[1].replace(/,/g, ''));
 
-          transactions.push({
-            date: currentDate,
-            description: 'BROUGHT FORWARD',
-            amount: 0,
-            balance,
-            type: 'brought_forward',
-          });
+            transactions.push({
+              date: currentDate,
+              description: 'BROUGHT FORWARD',
+              amount: 0,
+              balance,
+              type: 'brought_forward',
+            });
 
-          console.log(`✓ ${currentDate} | BROUGHT FORWARD | Opening Balance: £${balance}`);
+            console.log(`✓ ${currentDate} | BROUGHT FORWARD | Opening Balance: £${balance}`);
+            hasSeenBroughtForward = true;
+          }
+        } else {
+          console.log(`⚠️  Skipping duplicate BROUGHT FORWARD (page break)`);
         }
         continue;
       }
 
-      // Handle BALANCE CARRIED FORWARD (skip it)
+      // Handle BALANCE CARRIED FORWARD (skip - it's just page breaks)
       if (line.includes('BALANCE CARRIED FORWARD')) {
+        console.log(`⚠️  Skipping CARRIED FORWARD (page break)`);
         continue;
       }
 
