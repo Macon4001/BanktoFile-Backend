@@ -3077,38 +3077,45 @@ export class PDFParser {
       const line = lines[i].trim();
 
       // Skip empty lines and headers/footers
+      // Be very specific to avoid skipping legitimate transactions
       if (!line ||
-          line.includes('JOEL KHAEMBA') ||
-          line.includes('ABINGTON STREET') ||
-          line.includes('NORTHAMPTON') ||
-          line.includes('UNITED') ||
-          line.includes('KINGDOM') ||
-          line.includes('NN1') ||
-          line.includes('Opening Balance') ||
-          line.includes('Payments In') ||
-          line.includes('Payments Out') ||
-          line.includes('Closing Balance') ||
-          line.includes('International Bank Account Number') ||
-          line.includes('Branch Identifier Code') ||
-          line.includes('Account Name') ||
-          line.includes('Sortcode') ||
-          line.includes('Account Number') ||
-          line.includes('Sheet Number') ||
-          line.includes('Contact tel') ||
-          line.includes('Text phone') ||
-          line.includes('www.hsbc.co.uk') ||
-          line.includes('Account Summary') ||
-          line.includes('Your Basic Bank Account details') ||
-          line.includes('Your Statement') ||
-          line.includes('see reverse for call times') ||
-          line.includes('used by deaf or speech impaired') ||
-          line.includes('Date Payment Type and details') ||
-          line.includes('Paid out') ||
-          line.includes('Paid in') ||
-          line.includes('Balance') ||
+          line === 'Opening Balance' ||
+          line === 'Payments In' ||
+          line === 'Payments Out' ||
+          line === 'Closing Balance' ||
+          line === 'International Bank Account Number' ||
+          line === 'Branch Identifier Code' ||
+          line === 'Account Name' ||
+          line === 'Sortcode' ||
+          line === 'Account Number' ||
+          line === 'Sheet Number' ||
+          line === 'Contact tel' ||
+          line === 'Text phone' ||
+          line === 'www.hsbc.co.uk' ||
+          line === 'Account Summary' ||
+          line === 'Your Basic Bank Account details' ||
+          line === 'Your Statement' ||
+          line === 'see reverse for call times' ||
+          line === 'used by deaf or speech impaired customers' ||
+          line === 'Date Payment Type and details' ||
+          line.match(/^DatePayMemtType and details$/) ||
+          line === 'Paid out' ||
+          line === 'Paid in' ||
+          line === 'Balance' ||
+          line.match(/^Paid outPaid inBalance$/) ||
           line.match(/^GB\d{2}HBUK/) || // IBAN
-          line.match(/^HBUKGB/) || // BIC
-          line.match(/^\d{2}-\d{2}-\d{2}\s+\d{8}\s+\d+$/)) { // Sort code + account number format
+          line.match(/^HBUKGB\d+L?$/) || // BIC
+          line.match(/^\d{2}-\d{2}-\d{2}\d{8}\d+$/) || // Sort code + account number (no spaces)
+          line.match(/^40-35-\d{2}\d{8}\d+/) || // Sort code format with dashes
+          line.match(/^\d{4},\d{3}\.\d{2}$/) || // Just amounts like "4,322.98"
+          line.match(/^[A-Z\s]+NN1\s+\d+AN$/) || // Address lines like "NORTHAMPTON NN1 2AN"
+          line.match(/^KINGDOM$/) ||
+          line.match(/^UNITED$/) ||
+          line.match(/^\d+\s+ABINGTON\s+STREET$/) ||
+          line.match(/^JOEL KHAEMBA/) ||
+          line.match(/^\.$/) || // Just a period
+          line.match(/^A$/) || // Just letter A (page markers)
+          line.match(/^\s+\.?\s*$/)) { // Whitespace or just punctuation
         continue;
       }
 
@@ -3157,7 +3164,20 @@ export class PDFParser {
         this.processHSBCLine(restOfLine, currentDate, transactions);
       } else if (currentDate && line.match(/^(CR|BP|VIS|DD|\)\)\))/)) {
         // Same-day transaction (no date prefix, but has transaction type prefix)
-        this.processHSBCLine(line, currentDate, transactions);
+        // HSBC PDFs often have chaotic text extraction, so look ahead for amounts
+        let fullLine = line;
+
+        // Check if next line(s) contain just numbers (amounts/balances split across lines)
+        if (i + 1 < lines.length) {
+          const nextLine = lines[i + 1].trim();
+          // If next line is just numbers, it's probably the amount/balance
+          if (nextLine && nextLine.match(/^[\d,]+\.?\d{0,2}[\d,]*\.?\d{0,2}$/)) {
+            fullLine += ' ' + nextLine;
+            i++; // Skip the next line since we consumed it
+          }
+        }
+
+        this.processHSBCLine(fullLine, currentDate, transactions);
       }
     }
 
@@ -3177,21 +3197,38 @@ export class PDFParser {
     let description = line;
 
     // Determine transaction type based on prefix
-    if (line.startsWith('CR ')) {
+    // Handle both "CR " and "CR" (with/without space) due to chaotic PDF extraction
+    if (line.match(/^CR\s/)) {
       type = 'credit';
       description = line.substring(3).trim();
-    } else if (line.startsWith('BP ')) {
+    } else if (line.match(/^CR[A-Z]/)) {
+      // CRSomething (no space)
+      type = 'credit';
+      description = line.substring(2).trim();
+    } else if (line.match(/^BP\s/)) {
       type = 'debit';
       description = line.substring(3).trim();
-    } else if (line.startsWith('VIS ')) {
+    } else if (line.match(/^BP[A-Z]/)) {
+      type = 'debit';
+      description = line.substring(2).trim();
+    } else if (line.match(/^VIS\s/)) {
       type = 'debit';
       description = line.substring(4).trim();
-    } else if (line.startsWith('DD ')) {
+    } else if (line.match(/^VIS[A-Z]/)) {
       type = 'debit';
       description = line.substring(3).trim();
-    } else if (line.startsWith('))) ')) {
+    } else if (line.match(/^DD\s/)) {
+      type = 'debit';
+      description = line.substring(3).trim();
+    } else if (line.match(/^DD[A-Z]/)) {
+      type = 'debit';
+      description = line.substring(2).trim();
+    } else if (line.match(/^\)\)\)\s/)) {
       type = 'debit';
       description = line.substring(4).trim();
+    } else if (line.match(/^\)\)\)[A-Z]/)) {
+      type = 'debit';
+      description = line.substring(3).trim();
     }
 
     // Extract amounts and balance from the line
