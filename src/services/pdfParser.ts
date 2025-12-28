@@ -1125,9 +1125,10 @@ export class PDFParser {
           pendingDescription = restOfLine;
           console.log(`Starting multi-line description: ${pendingDescription}`);
         }
-      } else if (currentDate && line.match(/^[A-Z]/)) {
-        // No date prefix, but line starts with uppercase letter
+      } else if (currentDate && line.match(/^[A-Z0-9]/)) {
+        // No date prefix, but line starts with uppercase letter or digit
         // Could be: 1) same-day transaction, or 2) continuation of multi-line description
+        // Examples: "PAYPAL", "Contactless Payment", "1D AUTOROUlES"
 
         // Check if this line has numbers with decimals (likely a transaction)
         const hasDecimalNumbers = /[\d,]+[.,]\d{1,2}/.test(line);
