@@ -178,6 +178,12 @@ export class PDFParser {
       return this.extractRevolutTransactions(text);
     }
 
+    // Check if this is an HSBC statement
+    if (text.includes("HSBC") || text.includes("HBUKGB") || text.includes("www.hsbc.co.uk")) {
+      console.log("Detected HSBC bank statement");
+      return this.extractHSBCTransactions(text);
+    }
+
     // Common date patterns (non-global for better matching)
     const datePatterns = [
       /\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/, // MM/DD/YYYY or DD/MM/YYYY
@@ -3044,6 +3050,201 @@ export class PDFParser {
 
     console.log(`Extracted ${transactions.length} Revolut transactions`);
     return transactions;
+  }
+
+  private extractHSBCTransactions(text: string): Transaction[] {
+    const transactions: Transaction[] = [];
+    const lines = text.split('\n');
+
+    console.log('Parsing HSBC statement...');
+
+    // HSBC date pattern: "DD Mmm YY" (e.g., "01 Aug 24", "13 Aug 24")
+    const hsbcDatePattern = /^(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2})\s+(.+)/i;
+
+    // Extract year from the statement period or date
+    let statementYear = '2024'; // Default
+    const yearMatch = text.match(/(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4}))/i);
+    if (yearMatch) {
+      statementYear = yearMatch[2];
+      console.log(`Found statement year: ${statementYear}`);
+    }
+
+    // Track the current date for transactions on same date
+    let currentDate = '';
+
+    // Parse line by line
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Skip empty lines and headers/footers
+      if (!line ||
+          line.includes('JOEL KHAEMBA') ||
+          line.includes('ABINGTON STREET') ||
+          line.includes('NORTHAMPTON') ||
+          line.includes('UNITED') ||
+          line.includes('KINGDOM') ||
+          line.includes('NN1') ||
+          line.includes('Opening Balance') ||
+          line.includes('Payments In') ||
+          line.includes('Payments Out') ||
+          line.includes('Closing Balance') ||
+          line.includes('International Bank Account Number') ||
+          line.includes('Branch Identifier Code') ||
+          line.includes('Account Name') ||
+          line.includes('Sortcode') ||
+          line.includes('Account Number') ||
+          line.includes('Sheet Number') ||
+          line.includes('Contact tel') ||
+          line.includes('Text phone') ||
+          line.includes('www.hsbc.co.uk') ||
+          line.includes('Account Summary') ||
+          line.includes('Your Basic Bank Account details') ||
+          line.includes('Your Statement') ||
+          line.includes('see reverse for call times') ||
+          line.includes('used by deaf or speech impaired') ||
+          line.includes('Date Payment Type and details') ||
+          line.includes('Paid out') ||
+          line.includes('Paid in') ||
+          line.includes('Balance') ||
+          line.match(/^GB\d{2}HBUK/) || // IBAN
+          line.match(/^HBUKGB/) || // BIC
+          line.match(/^\d{2}-\d{2}-\d{2}\s+\d{8}\s+\d+$/)) { // Sort code + account number format
+        continue;
+      }
+
+      // Handle BALANCE BROUGHT FORWARD
+      if (line.includes('BALANCE BROUGHT FORWARD')) {
+        const balanceMatch = line.match(/([\d,]+\.?\d{0,2})$/);
+        if (balanceMatch && currentDate) {
+          const balance = parseFloat(balanceMatch[1].replace(/,/g, ''));
+
+          transactions.push({
+            date: currentDate,
+            description: 'BROUGHT FORWARD',
+            amount: 0,
+            balance,
+            type: 'brought_forward',
+          });
+
+          console.log(`✓ ${currentDate} | BROUGHT FORWARD | Opening Balance: £${balance}`);
+        }
+        continue;
+      }
+
+      // Handle BALANCE CARRIED FORWARD (skip it)
+      if (line.includes('BALANCE CARRIED FORWARD')) {
+        continue;
+      }
+
+      // Check if line starts with a date
+      const dateMatch = line.match(hsbcDatePattern);
+
+      if (dateMatch) {
+        // This line starts with a date
+        const dateStr = dateMatch[1]; // e.g., "01 Aug 24"
+        const restOfLine = dateMatch[2].trim();
+
+        // Convert "DD Mmm YY" to "DD Mmm YYYY"
+        const dateParts = dateStr.split(/\s+/);
+        if (dateParts.length === 3) {
+          const day = dateParts[0];
+          const month = dateParts[1];
+          const year = dateParts[2].length === 2 ? '20' + dateParts[2] : dateParts[2];
+          currentDate = `${day} ${month} ${year}`;
+        }
+
+        // Process the rest of the line as transaction
+        this.processHSBCLine(restOfLine, currentDate, transactions);
+      } else if (currentDate && line.match(/^(CR|BP|VIS|DD|\)\)\))/)) {
+        // Same-day transaction (no date prefix, but has transaction type prefix)
+        this.processHSBCLine(line, currentDate, transactions);
+      }
+    }
+
+    console.log(`Extracted ${transactions.length} HSBC transactions`);
+    return transactions;
+  }
+
+  private processHSBCLine(line: string, currentDate: string, transactions: Transaction[]): void {
+    // HSBC transaction types:
+    // CR = Credit (money in)
+    // BP = Bill Payment / Payment out (money out)
+    // VIS = Visa transaction (money out)
+    // DD = Direct Debit (money out)
+    // ))) = Contactless payment (money out)
+
+    let type: 'credit' | 'debit' = 'debit';
+    let description = line;
+
+    // Determine transaction type based on prefix
+    if (line.startsWith('CR ')) {
+      type = 'credit';
+      description = line.substring(3).trim();
+    } else if (line.startsWith('BP ')) {
+      type = 'debit';
+      description = line.substring(3).trim();
+    } else if (line.startsWith('VIS ')) {
+      type = 'debit';
+      description = line.substring(4).trim();
+    } else if (line.startsWith('DD ')) {
+      type = 'debit';
+      description = line.substring(3).trim();
+    } else if (line.startsWith('))) ')) {
+      type = 'debit';
+      description = line.substring(4).trim();
+    }
+
+    // Extract amounts and balance from the line
+    // Format: "Description Amount [Balance]"
+    // The balance is optional and appears at the end
+    const numbers = description.match(/[\d,]+\.?\d{0,2}/g);
+
+    if (!numbers || numbers.length === 0) {
+      return; // No numbers found
+    }
+
+    // Parse numbers
+    const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
+
+    let amount = 0;
+    let balance = 0;
+
+    if (amounts.length === 1) {
+      // Only one number - could be amount or balance
+      // If line has description text before the number, it's likely the amount
+      const firstNumberIndex = description.search(/[\d,]+\.?\d{0,2}/);
+      const textBeforeNumber = description.substring(0, firstNumberIndex).trim();
+
+      if (textBeforeNumber.length > 2) {
+        // Has description, so number is the amount
+        amount = amounts[0];
+        balance = 0; // Balance not shown on this line
+      } else {
+        // No description, might be just balance (skip)
+        return;
+      }
+    } else if (amounts.length >= 2) {
+      // Multiple numbers: last one is balance, second-to-last is amount
+      amount = amounts[amounts.length - 2];
+      balance = amounts[amounts.length - 1];
+    }
+
+    // Extract description (everything before the first number)
+    const firstNumberIndex = description.search(/[\d,]+\.?\d{0,2}/);
+    if (firstNumberIndex > 0) {
+      description = description.substring(0, firstNumberIndex).trim();
+    }
+
+    // Add transaction
+    transactions.push({
+      date: currentDate,
+      description: description || 'HSBC Transaction',
+      amount,
+      balance,
+      type,
+    });
+
+    console.log(`✓ ${currentDate} | ${type === 'credit' ? 'IN' : 'OUT'} | ${description} | £${amount} | Balance: £${balance}`);
   }
 
   private extractMetadata(text: string): ParsedStatement["metadata"] {
