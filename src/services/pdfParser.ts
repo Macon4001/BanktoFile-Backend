@@ -1018,8 +1018,9 @@ export class PDFParser {
       }
     }
 
-    // Track current date for multi-line descriptions
+    // Track current date and pending multi-line descriptions
     let currentDate = '';
+    let pendingDescription = ''; // Accumulate description parts
 
     // Parse line by line
     for (let i = 0; i < lines.length; i++) {
@@ -1112,14 +1113,48 @@ export class PDFParser {
 
         console.log(`Found dated line: ${currentDate} - ${line.substring(0, 60)}...`);
 
-        // Process this line as a transaction
-        this.processNationwideLine(restOfLine, currentDate, transactions);
+        // Check if this line has decimal numbers (complete transaction)
+        const hasDecimalNumbers = /[\d,]+[.,]\d{1,2}/.test(restOfLine);
+
+        if (hasDecimalNumbers) {
+          // Complete transaction on one line
+          this.processNationwideLine(restOfLine, currentDate, transactions);
+          pendingDescription = ''; // Clear any pending
+        } else {
+          // Start of multi-line description (e.g., "Contactless Payment")
+          pendingDescription = restOfLine;
+          console.log(`Starting multi-line description: ${pendingDescription}`);
+        }
       } else if (currentDate && line.match(/^[A-Z]/)) {
         // No date prefix, but line starts with uppercase letter
-        // This is likely a same-day transaction (shares date with previous line)
-        // Example: "ADIDAS FELTHAM GB 72.70 20,210.80"
-        console.log(`Found same-day transaction: ${line.substring(0, 60)}...`);
-        this.processNationwideLine(line, currentDate, transactions);
+        // Could be: 1) same-day transaction, or 2) continuation of multi-line description
+
+        // Check if this line has numbers with decimals (likely a transaction)
+        const hasDecimalNumbers = /[\d,]+[.,]\d{1,2}/.test(line);
+
+        if (hasDecimalNumbers) {
+          // This line has amount/balance, process as transaction
+          const fullDesc = pendingDescription ? pendingDescription + ' ' + line : line;
+          console.log(`Found same-day transaction: ${line.substring(0, 60)}...`);
+          this.processNationwideLine(fullDesc, currentDate, transactions);
+          pendingDescription = ''; // Clear pending
+        } else {
+          // No decimal numbers - might be continuation of description
+          if (pendingDescription) {
+            pendingDescription += ' ' + line;
+          } else {
+            pendingDescription = line;
+          }
+          console.log(`Accumulating description: ${pendingDescription.substring(0, 60)}...`);
+        }
+      } else if (currentDate && /^[\d,]+[.,]\d{1,2}/.test(line)) {
+        // Line is just an amount (e.g., "34.72") - attach to pending description
+        if (pendingDescription) {
+          const fullLine = pendingDescription + ' ' + line;
+          console.log(`Attaching amount to pending desc: ${fullLine.substring(0, 60)}...`);
+          this.processNationwideLine(fullLine, currentDate, transactions);
+          pendingDescription = ''; // Clear pending
+        }
       }
     }
 
