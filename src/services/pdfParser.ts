@@ -1134,15 +1134,11 @@ export class PDFParser {
 
     if (!allNumbers || allNumbers.length === 0) return;
 
-    // Filter to get only monetary amounts (have decimal points OR are reasonable transaction amounts)
-    // Account numbers are typically 8 digits, sort codes are 6 digits (shown as XX-XX-XX)
-    // Reference numbers can be very long (e.g., 33212269001)
-    const numbers = allNumbers.filter(num => {
-      const value = parseFloat(num.replace(/,/g, ''));
-      // Keep if it has decimal point OR is a reasonable transaction/balance amount (< 1,000,000)
-      // This filters out account numbers like 60408617 and refs like 33212269001
-      return num.includes('.') || value < 1000000;
-    });
+    // Filter to get only monetary amounts (must have decimal points)
+    // Account numbers are typically 6-8 digits without decimals (071660, 60408617)
+    // Reference numbers can be very long without decimals (33212269001)
+    // Transaction amounts ALWAYS have decimal points (34.72, 1485.99, 2000.00)
+    const numbers = allNumbers.filter(num => num.includes('.'));
 
     if (numbers.length === 0) return;
 
