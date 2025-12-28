@@ -3076,7 +3076,10 @@ export class PDFParser {
     console.log('Parsing HSBC statement...');
 
     // HSBC date pattern: "DD Mmm YY" (e.g., "01 Aug 24", "13 Aug 24")
-    const hsbcDatePattern = /^(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2})\s+(.+)/i;
+    // PDF extraction sometimes removes spaces, so "14 Aug 24CR" instead of "14 Aug 24 CR"
+    // Make the space after year optional: \s* instead of \s+
+    // Make rest of line optional too: (.*)
+    const hsbcDatePattern = /^(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2})\s*(.*)/i;
 
     // Extract year from the statement period or date
     let statementYear = '2024'; // Default
@@ -3085,6 +3088,11 @@ export class PDFParser {
       statementYear = yearMatch[2];
       console.log(`Found statement year: ${statementYear}`);
     }
+
+    // Track processed transaction descriptions to avoid double-processing
+    // When we process from raw text reconstruction, we'll add descriptions here
+    // Then skip them in line-by-line processing
+    const processedDescriptions = new Set<string>();
 
     // First pass: Extract all dates from the entire text to establish date context
     // HSBC PDFs have chaotic ordering, so we need to find dates anywhere in text
@@ -3106,15 +3114,172 @@ export class PDFParser {
     }
     console.log(`Found ${allDates.length} unique dates in statement:`, allDates.slice(0, 5));
 
+    // Pre-processing: Search for date patterns in the raw text and mark their positions
+    // Then try to inject date markers into the lines array
+    // This handles cases where "13 Aug 24 BP ANDREI AM" exists in raw text but is fragmented in lines
+    for (const dateStr of allDates) {
+      // Convert "13 Aug 2024" back to "13 Aug 24" to search in raw text
+      const parts = dateStr.split(' ');
+      if (parts.length === 3) {
+        const shortYear = parts[2].substring(2); // "2024" -> "24"
+        const shortDate = `${parts[0]} ${parts[1]} ${shortYear}`; // "13 Aug 24"
+
+        // Find this date in the raw text
+        // Try exact match first
+        let dateIndex = text.indexOf(shortDate);
+
+        // If not found, try with regex to handle variable whitespace
+        if (dateIndex < 0) {
+          const flexibleDatePattern = new RegExp(`${parts[0]}\\s+${parts[1]}\\s+${shortYear}`, 'i');
+          const match = text.match(flexibleDatePattern);
+          if (match) {
+            dateIndex = match.index || -1;
+            console.log(`🔍 Found "${shortDate}" with flexible whitespace at position ${dateIndex}`);
+          } else {
+            console.log(`❌ Could not find "${shortDate}" in raw text (not even with flexible whitespace)`);
+          }
+        }
+
+        if (dateIndex >= 0) {
+          // Extract enough text after the date to capture multiple same-day transactions
+          // Each transaction might be ~50-100 chars, and we might have 3-5 transactions on same day
+          const afterDate = text.substring(dateIndex, dateIndex + 500);
+          console.log(`🔍 Found "${shortDate}" in raw text at position ${dateIndex}, context: "${afterDate.substring(0, 60)}..."`);
+
+          // Check if this looks like a transaction line (has CR, BP, VIS, DD, or )))
+          const datePattern = new RegExp(`^${parts[0]}\\s+${parts[1]}\\s+${shortYear}\\s*(CR|BP|VIS|DD|\\)\\)\\))`, 'i');
+          if (afterDate.match(datePattern)) {
+            // Extract ALL transactions for this date (there might be multiple same-day transactions)
+            // Example: "13 Aug 24 BP ANDREI AM Help 200.00" followed by "BP ANDREI AM Help 500.00"
+            const allLines = afterDate.split('\n');
+            let currentIndex = 0;
+            const reconstructedTransactions: string[] = [];
+
+            // Keep extracting transactions until we hit a different date or run out of lines
+            while (currentIndex < allLines.length && currentIndex < 50) { // max 50 lines to prevent infinite loop
+              let transactionLine = '';
+              let foundAmount = false;
+
+              // Build one transaction by combining lines until we find an amount
+              for (let j = currentIndex; j < Math.min(currentIndex + 10, allLines.length); j++) {
+                const part = allLines[j].trim();
+
+                // Stop if we hit another date (different from current date)
+                if (part.match(/^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2}/i) &&
+                    !part.startsWith(parts[0])) {
+                  break;
+                }
+
+                // Stop if we hit BALANCE markers
+                if (part.includes('BALANCE BROUGHT FORWARD') || part.includes('BALANCE CARRIED FORWARD')) {
+                  break;
+                }
+
+                if (part.length > 0) {
+                  transactionLine += part + ' ';
+                  currentIndex = j + 1;
+
+                  // If we found an amount, this transaction is complete
+                  if (part.match(/\d+\.\d{1,2}/)) {
+                    foundAmount = true;
+                    break;
+                  }
+                }
+              }
+
+              if (foundAmount && transactionLine.length > 0) {
+                const cleaned = transactionLine.trim().replace(/\s+/g, ' ');
+                reconstructedTransactions.push(cleaned);
+                console.log(`✅ Reconstructed transaction #${reconstructedTransactions.length}: "${cleaned.substring(0, 60)}..."`);
+
+                // Check if next line starts with a transaction type (same-day transaction)
+                if (currentIndex < allLines.length) {
+                  const nextLine = allLines[currentIndex].trim();
+                  // If next line starts with CR, BP, VIS, DD, or ))) - it's another transaction on the same day
+                  if (!nextLine.match(/^(CR|BP|VIS|DD|\)\)\))/i)) {
+                    break; // No more transactions for this date
+                  }
+                }
+              } else {
+                break; // Couldn't find a complete transaction
+              }
+            }
+
+            // Process reconstructed transactions DIRECTLY instead of adding to lines array
+            // This prevents double-processing (once from reconstruction, once from line-by-line)
+            console.log(`📝 Extracted ${reconstructedTransactions.length} transaction(s) for ${shortDate}`);
+
+            for (let idx = 0; idx < reconstructedTransactions.length; idx++) {
+              let txn = reconstructedTransactions[idx];
+              console.log(`  → Processing transaction #${idx + 1}: "${txn.substring(0, 60)}..."`);
+
+              // If transaction doesn't already have a date prefix, add it
+              const hasDatePrefix = txn.match(/^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2}/i);
+              if (!hasDatePrefix) {
+                txn = `${shortDate} ${txn}`;
+                console.log(`    ↳ Added date prefix: "${txn.substring(0, 60)}..."`);
+              } else {
+                console.log(`    ↳ Already has date prefix, using as-is`);
+              }
+
+              // Normalize spacing: ensure there's a space between date and transaction type
+              // Fix cases like "13 Aug 24BPANDREI" → "13 Aug 24 BPANDREI"
+              txn = txn.replace(/(\d{2})(CR|BP|VIS|DD|\)\)\))/ig, '$1 $2');
+
+              // Also ensure space after transaction type code
+              // Fix cases like "BPANDREI" → "BP ANDREI", "CRANDREI" → "CR ANDREI"
+              txn = txn.replace(/(CR|BP|VIS|DD|\)\)\))([A-Z])/g, '$1 $2');
+              console.log(`    ↳ Normalized spacing: "${txn.substring(0, 60)}..."`);
+
+              // Extract description from this transaction to mark as processed
+              // Remove date, transaction type (CR/BP/VIS/DD/))))), and keep description+amount
+              const descKey = txn
+                .replace(/^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2}\s*/i, '')
+                .replace(/^(CR|BP|VIS|DD|\)\)\))\s*/i, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+              processedDescriptions.add(descKey);
+              console.log(`    ↳ Tracking as processed: "${descKey.substring(0, 50)}..."`);
+
+              // Process this transaction directly
+              // IMPORTANT: processHSBCLine expects line WITHOUT date prefix
+              // Remove the date prefix before processing
+              const lineWithoutDate = txn.replace(/^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2}\s+/i, '');
+
+              const beforeCount = transactions.length;
+              this.processHSBCLine(lineWithoutDate, dateStr, transactions);
+              const afterCount = transactions.length;
+              if (afterCount > beforeCount) {
+                console.log(`    ✅ Successfully added transaction (total: ${afterCount})`);
+              } else {
+                console.log(`    ❌ Transaction was NOT added - processHSBCLine rejected it`);
+                console.log(`    ❌ Line WITH date: "${txn}"`);
+                console.log(`    ❌ Line WITHOUT date: "${lineWithoutDate}"`);
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Track the current date for transactions on same date
     // Start with first date found
     let currentDate = allDates.length > 0 ? allDates[0] : '';
-    let currentDateIndex = 0;
     let hasSeenBroughtForward = false; // Only add first BROUGHT FORWARD
 
     // Parse line by line
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
+
+      // Debug: Log ALL lines that contain "13" to see what's happening
+      if (line.includes('13')) {
+        console.log(`🔍 DEBUG - Line contains "13": "${line}"`);
+      }
+
+      // Debug: Log lines that might contain dates 13-19
+      if (line.match(/^1[3-9]\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i)) {
+        console.log(`🔍 DEBUG - Potential date line: "${line}"`);
+      }
 
       // Skip empty lines and headers/footers
       // Be very specific to avoid skipping legitimate transactions
@@ -3183,41 +3348,53 @@ export class PDFParser {
         continue;
       }
 
-      // Handle BALANCE CARRIED FORWARD (skip - it's just page breaks)
+      // Handle BALANCE CARRIED FORWARD (page breaks - add as balance checkpoint)
       if (line.includes('BALANCE CARRIED FORWARD')) {
-        console.log(`⚠️  Skipping CARRIED FORWARD (page break)`);
+        const balanceMatch = line.match(/([\d,]+\.?\d{0,2})$/);
+        if (balanceMatch && currentDate) {
+          const balance = parseFloat(balanceMatch[1].replace(/,/g, ''));
+
+          transactions.push({
+            date: currentDate,
+            description: 'CARRIED FORWARD',
+            amount: 0,
+            balance,
+            type: 'balance',
+          });
+
+          console.log(`✓ ${currentDate} | CARRIED FORWARD | Page Balance: £${balance}`);
+        }
         continue;
       }
 
-      // Check if line contains a date anywhere (not just at start)
-      // This handles chaotic PDF extraction where dates might appear mid-line
-      const lineHasDate = line.match(/\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2})\b/i);
-      if (lineHasDate) {
-        const dateStr = lineHasDate[1];
-        const dateParts = dateStr.split(/\s+/);
-        if (dateParts.length === 3) {
-          const day = dateParts[0];
-          const month = dateParts[1];
-          const year = dateParts[2].length === 2 ? '20' + dateParts[2] : dateParts[2];
-          const newDate = `${day} ${month} ${year}`;
+      // Check if line is just a day number (1-31) - might be split date
+      // PDF extraction sometimes splits "13 Aug 24" into separate lines: "13", "Aug 24", etc.
+      if (line.match(/^\d{1,2}$/) && i + 1 < lines.length) {
+        const nextLine = lines[i + 1].trim();
+        console.log(`🔍 Line is just number "${line}", next line is: "${nextLine}"`);
 
-          // Advance to next date in our list
-          const nextIndex = allDates.indexOf(newDate);
-          if (nextIndex >= 0 && nextIndex > currentDateIndex) {
-            currentDateIndex = nextIndex;
-            currentDate = newDate;
-            console.log(`Advanced to date: ${currentDate}`);
-          }
+        // Check if next line starts with a month (Aug, Sep, etc.)
+        if (nextLine.match(/^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i)) {
+          // Combine this line with next line(s) to reconstruct the date
+          const reconstructed = line + ' ' + nextLine;
+          console.log(`🔧 Reconstructing split date: "${line}" + "${nextLine}" = "${reconstructed}"`);
+          // Replace current line with reconstructed version
+          lines[i] = reconstructed;
+          // Skip the next line since we consumed it
+          i--;
+          continue;
+        } else {
+          console.log(`❌ Next line doesn't start with month name, skipping reconstruction`);
         }
       }
 
-      // Check if line starts with a date
+      // Check if line starts with a date (PRIORITY - most reliable)
       const dateMatch = line.match(hsbcDatePattern);
 
       if (dateMatch) {
-        // This line starts with a date
-        const dateStr = dateMatch[1]; // e.g., "01 Aug 24"
-        const restOfLine = dateMatch[2].trim();
+        // This line starts with a date - ALWAYS update currentDate (most reliable)
+        const dateStr = dateMatch[1]; // e.g., "01 Aug 24", "13 Aug 24"
+        let restOfLine = dateMatch[2].trim();
 
         // Convert "DD Mmm YY" to "DD Mmm YYYY"
         const dateParts = dateStr.split(/\s+/);
@@ -3226,31 +3403,133 @@ export class PDFParser {
           const month = dateParts[1];
           const year = dateParts[2].length === 2 ? '20' + dateParts[2] : dateParts[2];
           currentDate = `${day} ${month} ${year}`;
+
+          console.log(`✓ Found date at line start: ${currentDate} | Rest: ${restOfLine.substring(0, 40)}`);
         }
 
-        // Process the rest of the line as transaction
-        this.processHSBCLine(restOfLine, currentDate, transactions);
-      } else if (currentDate && line.match(/^(CR|BP|VIS|DD|\)\)\))/)) {
-        // Same-day transaction (no date prefix, but has transaction type prefix)
-        // HSBC PDFs often have chaotic text extraction, so look ahead for amounts
-        let fullLine = line;
+        // Look ahead for amounts or continuation (same as below)
+        // This handles cases like:
+        // 13 Aug 24 BP ANDREI AM
+        // Help 200.00
+        let linesConsumed = 0;
+        for (let j = 1; j <= 3 && (i + j) < lines.length; j++) {
+          const nextLine = lines[i + j].trim();
 
-        // Check if next line(s) contain just numbers (amounts/balances split across lines)
-        if (i + 1 < lines.length) {
-          const nextLine = lines[i + 1].trim();
-          // If next line is just numbers, it's probably the amount/balance
-          if (nextLine && nextLine.match(/^[\d,]+\.?\d{0,2}[\d,]*\.?\d{0,2}$/)) {
-            fullLine += ' ' + nextLine;
-            i++; // Skip the next line since we consumed it
+          // Stop if we hit another transaction type or date
+          if (nextLine.match(/^(CR|BP|VIS|DD|\)\)\)|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))/i)) {
+            break;
+          }
+
+          // Stop if we hit BALANCE BROUGHT/CARRIED FORWARD
+          if (nextLine.includes('BALANCE BROUGHT FORWARD') || nextLine.includes('BALANCE CARRIED FORWARD')) {
+            break;
+          }
+
+          // If line contains a decimal number or looks like a description continuation, add it
+          if (nextLine && (nextLine.match(/\d+\.\d{1,2}/) || (nextLine.length > 0 && !nextLine.match(/^[\d\s,.]+$/)))) {
+            restOfLine += ' ' + nextLine;
+            linesConsumed++;
+
+            // If we found an amount, we can stop looking
+            if (nextLine.match(/\d+\.\d{1,2}/)) {
+              break;
+            }
           }
         }
 
-        this.processHSBCLine(fullLine, currentDate, transactions);
+        // Skip all the lines we consumed
+        i += linesConsumed;
+
+        // Process the rest of the line as transaction (if there's content)
+        if (restOfLine && restOfLine.trim().length > 0) {
+          this.processHSBCLine(restOfLine, currentDate, transactions);
+        }
+      } else if (currentDate && line.match(/^(CR|BP|VIS|DD|\)\)\))/)) {
+        // Same-day transaction (no date prefix, but has transaction type prefix)
+        // Uses currentDate context from previous date-matched line
+        console.log(`  → Same-day transaction using date: ${currentDate} | Line: ${line.substring(0, 40)}`);
+        let fullLine = line;
+        let linesConsumed = 0;
+
+        // Look ahead up to 3 lines for amounts or continuation
+        // This handles cases like:
+        // CR ANDREI AM
+        // MOM 200.00
+        // Or:
+        // CR Stuart Delivery Lt
+        // 7759 75.02
+        for (let j = 1; j <= 3 && (i + j) < lines.length; j++) {
+          const nextLine = lines[i + j].trim();
+
+          // Stop if we hit another transaction type or date
+          if (nextLine.match(/^(CR|BP|VIS|DD|\)\)\)|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))/i)) {
+            break;
+          }
+
+          // Stop if we hit BALANCE BROUGHT/CARRIED FORWARD
+          if (nextLine.includes('BALANCE BROUGHT FORWARD') || nextLine.includes('BALANCE CARRIED FORWARD')) {
+            break;
+          }
+
+          // If line contains a decimal number or looks like a description continuation, add it
+          if (nextLine && (nextLine.match(/\d+\.\d{1,2}/) || (nextLine.length > 0 && !nextLine.match(/^[\d\s,.]+$/)))) {
+            fullLine += ' ' + nextLine;
+            linesConsumed++;
+
+            // If we found an amount, we can stop looking
+            if (nextLine.match(/\d+\.\d{1,2}/)) {
+              break;
+            }
+          }
+        }
+
+        // Skip all the lines we consumed
+        i += linesConsumed;
+
+        // Check if this transaction was already processed from raw text reconstruction
+        const descKey = fullLine
+          .replace(/^(CR|BP|VIS|DD|\)\)\))\s*/i, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        if (processedDescriptions.has(descKey)) {
+          console.log(`  ↳ Skipping already-processed transaction from reconstruction: ${descKey.substring(0, 50)}...`);
+        } else {
+          this.processHSBCLine(fullLine, currentDate, transactions);
+        }
       }
     }
 
-    console.log(`Extracted ${transactions.length} HSBC transactions`);
-    return transactions;
+    // Deduplicate transactions - but allow multiple identical transactions on the same date
+    // Strategy: Count occurrences per unique key and only keep the first N occurrences
+    // This allows legitimate duplicate transactions (e.g., two £500 payments on same day)
+    // while removing cross-page PDF repetitions
+    const transactionCounts = new Map<string, number>();
+    const uniqueTransactions: Transaction[] = [];
+
+    for (const txn of transactions) {
+      const key = `${txn.date}|${txn.description}|${txn.amount}|${txn.type}`;
+      const count = transactionCounts.get(key) || 0;
+
+      // Allow up to 10 identical transactions (should be more than enough for legitimate cases)
+      // This protects against accidental infinite loops while allowing real duplicates
+      if (count < 10) {
+        transactionCounts.set(key, count + 1);
+        uniqueTransactions.push(txn);
+      } else {
+        console.log(`⚠️  Skipping excessive duplicate (>${count}): ${txn.date} | ${txn.description} | £${txn.amount}`);
+      }
+    }
+
+    // Sort transactions by date (chronological order)
+    uniqueTransactions.sort((a, b) => {
+      const dateA = new Date(a.date);
+      const dateB = new Date(b.date);
+      return dateA.getTime() - dateB.getTime();
+    });
+
+    console.log(`Extracted ${transactions.length} HSBC transactions (${uniqueTransactions.length} unique, sorted by date)`);
+    return uniqueTransactions;
   }
 
   private processHSBCLine(line: string, currentDate: string, transactions: Transaction[]): void {
