@@ -3316,10 +3316,25 @@ export class PDFParser {
     // Parse numbers and filter out unreasonably large amounts (likely concatenated)
     // Normal bank transaction: £0.01 to £100,000 (most personal transactions under £10k)
     // Garbage concatenated numbers: £775975.02, £844332529338.19
-    const MAX_REASONABLE_AMOUNT = 1000000; // £1 million max per transaction
+    // Also reject numbers with too many digits (concatenated): 775975.02 has 6 digits before decimal
+    const MAX_REASONABLE_AMOUNT = 100000; // £100k max per transaction (lowered from 1M)
+    const MAX_DIGITS_BEFORE_DECIMAL = 5; // Max 5 digits before decimal (99,999.99)
+
     const amounts = numbers
       .map(n => parseFloat(n.replace(/,/g, '')))
-      .filter(n => n < MAX_REASONABLE_AMOUNT);
+      .filter(n => {
+        // Check amount is reasonable
+        if (n >= MAX_REASONABLE_AMOUNT) return false;
+
+        // Check digit count (detect concatenated numbers like 775975.02)
+        const digitsBeforeDecimal = Math.floor(n).toString().length;
+        if (digitsBeforeDecimal > MAX_DIGITS_BEFORE_DECIMAL) {
+          console.log(`⚠️  Rejecting amount £${n} - too many digits (${digitsBeforeDecimal})`);
+          return false;
+        }
+
+        return true;
+      });
 
     if (amounts.length === 0) {
       // All amounts were unreasonably large (likely concatenated numbers)
