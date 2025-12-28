@@ -114,6 +114,7 @@ export interface Feedback {
   session_id?: string | null;
   rating: 'positive' | 'negative';
   comment?: string | null;
+  email?: string | null;
   bank_name?: string | null;
   created_at: Date;
 }
@@ -927,15 +928,16 @@ export class PostgresStore {
     sessionId?: string | null;
     rating: 'positive' | 'negative';
     comment?: string | null;
+    email?: string | null;
     bankName?: string | null;
   }): Promise<Feedback> {
     const client = await pool.connect();
     try {
       const result = await client.query<Feedback>(
-        `INSERT INTO feedback (session_id, rating, comment, bank_name)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO feedback (session_id, rating, comment, email, bank_name)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING *`,
-        [data.sessionId || null, data.rating, data.comment || null, data.bankName || null]
+        [data.sessionId || null, data.rating, data.comment || null, data.email || null, data.bankName || null]
       );
       return result.rows[0];
     } finally {

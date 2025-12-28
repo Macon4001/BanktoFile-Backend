@@ -7,7 +7,7 @@ const router = express.Router();
 // POST /api/feedback - Submit user feedback (public endpoint)
 router.post('/feedback', async (req: Request, res: Response) => {
   try {
-    const { session_id, rating, comment, bank_name } = req.body;
+    const { session_id, rating, comment, email, bank_name } = req.body;
 
     // Validate required fields
     if (!rating || !['positive', 'negative'].includes(rating)) {
@@ -17,11 +17,29 @@ router.post('/feedback', async (req: Request, res: Response) => {
       });
     }
 
+    // Validate email is provided
+    if (!email || !email.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Email is required',
+      });
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid email address',
+      });
+    }
+
     // Create feedback
     const feedback = await db.createFeedback({
       sessionId: session_id || null,
       rating: rating as 'positive' | 'negative',
       comment: comment || null,
+      email: email.trim(),
       bankName: bank_name || null,
     });
 
