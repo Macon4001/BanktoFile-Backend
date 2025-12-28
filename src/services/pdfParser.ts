@@ -1156,9 +1156,28 @@ export class PDFParser {
     let type: 'credit' | 'debit' = 'debit';
 
     if (amounts.length === 1) {
-      // Only balance (no transaction amount)
-      balance = amounts[0];
-      return; // Skip lines with only balance
+      // Could be transaction amount without balance, or just a balance line
+      // If description looks like a transaction (not empty, has merchant/payee), treat as amount
+      if (desc && desc.length > 3) {
+        // This is a transaction amount, no balance shown
+        amount = amounts[0];
+        balance = 0; // Balance will be on a later line
+
+        // Determine if credit or debit based on description keywords
+        const lower = desc.toLowerCase();
+        if (lower.includes('bank credit') ||
+            lower.includes('automated credit') ||
+            lower.includes('credit transfer') ||
+            lower.includes('transfer from') ||
+            lower.includes('paid in')) {
+          type = 'credit';
+        } else {
+          type = 'debit';
+        }
+      } else {
+        // Just a standalone balance, skip it
+        return;
+      }
     } else if (amounts.length === 2) {
       // Either Out+Balance or In+Balance
       amount = amounts[0];
