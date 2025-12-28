@@ -3069,8 +3069,30 @@ export class PDFParser {
       console.log(`Found statement year: ${statementYear}`);
     }
 
+    // First pass: Extract all dates from the entire text to establish date context
+    // HSBC PDFs have chaotic ordering, so we need to find dates anywhere in text
+    const datePattern = /(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2})/gi;
+    const allDates: string[] = [];
+    let match;
+    while ((match = datePattern.exec(text)) !== null) {
+      const dateStr = match[1];
+      const dateParts = dateStr.split(/\s+/);
+      if (dateParts.length === 3) {
+        const day = dateParts[0];
+        const month = dateParts[1];
+        const year = dateParts[2].length === 2 ? '20' + dateParts[2] : dateParts[2];
+        const fullDate = `${day} ${month} ${year}`;
+        if (!allDates.includes(fullDate)) {
+          allDates.push(fullDate);
+        }
+      }
+    }
+    console.log(`Found ${allDates.length} unique dates in statement:`, allDates.slice(0, 5));
+
     // Track the current date for transactions on same date
-    let currentDate = '';
+    // Start with first date found
+    let currentDate = allDates.length > 0 ? allDates[0] : '';
+    let currentDateIndex = 0;
 
     // Parse line by line
     for (let i = 0; i < lines.length; i++) {
@@ -3141,6 +3163,28 @@ export class PDFParser {
       // Handle BALANCE CARRIED FORWARD (skip it)
       if (line.includes('BALANCE CARRIED FORWARD')) {
         continue;
+      }
+
+      // Check if line contains a date anywhere (not just at start)
+      // This handles chaotic PDF extraction where dates might appear mid-line
+      const lineHasDate = line.match(/\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2})\b/i);
+      if (lineHasDate) {
+        const dateStr = lineHasDate[1];
+        const dateParts = dateStr.split(/\s+/);
+        if (dateParts.length === 3) {
+          const day = dateParts[0];
+          const month = dateParts[1];
+          const year = dateParts[2].length === 2 ? '20' + dateParts[2] : dateParts[2];
+          const newDate = `${day} ${month} ${year}`;
+
+          // Advance to next date in our list
+          const nextIndex = allDates.indexOf(newDate);
+          if (nextIndex >= 0 && nextIndex > currentDateIndex) {
+            currentDateIndex = nextIndex;
+            currentDate = newDate;
+            console.log(`Advanced to date: ${currentDate}`);
+          }
+        }
       }
 
       // Check if line starts with a date
