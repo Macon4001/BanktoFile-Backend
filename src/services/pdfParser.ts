@@ -997,12 +997,25 @@ export class PDFParser {
     // Nationwide date pattern: "DD MMM" (e.g., "07 Feb" or "07Feb" with no space)
     const nationwideDatePattern = /^(\d{1,2}\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))\s*(.+)/i;
 
-    // Extract year from "Statement DD Month YYYY" header
-    let statementYear = '2025'; // Default
-    const yearMatch = text.match(/Statement\s+\d{1,2}\s+\w+\s+(\d{4})/i);
-    if (yearMatch) {
-      statementYear = yearMatch[1];
-      console.log(`Found statement year: ${statementYear}`);
+    // Extract year from statement - try multiple patterns
+    let statementYear = new Date().getFullYear().toString(); // Default to current year
+
+    // Try different patterns to find the year
+    const yearPatterns = [
+      /Statement\s+date\s+(\d{2})\/(\d{2})\/(\d{4})/i,  // "Statement date DD/MM/YYYY"
+      /dated\s+(\d{2})\/(\d{2})\/(\d{4})/i,             // "dated DD/MM/YYYY"
+      /\b(\d{4})\s*Balance from statement/i,            // "2020 Balance from statement"
+      /Statement\s+\d{1,2}\s+\w+\s+(\d{4})/i            // "Statement DD Month YYYY"
+    ];
+
+    for (const pattern of yearPatterns) {
+      const match = text.match(pattern);
+      if (match) {
+        // Get the year - it's the last capture group in all patterns
+        statementYear = match[match.length - 1];
+        console.log(`Found statement year: ${statementYear} using pattern: ${pattern}`);
+        break;
+      }
     }
 
     // Track current date for multi-line descriptions
@@ -1095,89 +1108,100 @@ export class PDFParser {
         // This line has a date - it's a transaction
         const dateWithoutYear = dateMatch[1];
         currentDate = `${dateWithoutYear} ${statementYear}`;
-        const description = dateMatch[2].trim();
+        const restOfLine = dateMatch[2].trim();
 
-        console.log(`Found dated transaction: ${currentDate} - ${line.substring(0, 60)}...`);
+        console.log(`Found dated line: ${currentDate} - ${line.substring(0, 60)}...`);
 
-        // Nationwide format: "DD MMM Description Out In Balance"
-        // Extract all numbers (Out, In, Balance)
-        const numbers = description.match(/[\d,]+\.?\d{0,2}/g);
-
-        if (numbers && numbers.length >= 1) {
-          const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
-
-          // Find where the first number appears
-          const firstNumberIndex = description.indexOf(numbers[0]);
-          let desc = description.substring(0, firstNumberIndex).trim();
-
-          // Determine transaction type based on number count and position
-          let out = 0;
-          let inAmount = 0;
-          let balance = 0;
-          let amount = 0;
-          let type: 'credit' | 'debit' = 'debit';
-
-          if (amounts.length === 1) {
-            // Only balance (no transaction amount)
-            balance = amounts[0];
-            continue; // Skip lines with only balance
-          } else if (amounts.length === 2) {
-            // Either Out+Balance or In+Balance
-            amount = amounts[0];
-            balance = amounts[1];
-
-            // Check if description suggests credit
-            const lower = desc.toLowerCase();
-            if (lower.includes('bank credit') ||
-                lower.includes('automated credit') ||
-                lower.includes('credit transfer') ||
-                lower.includes('paid in')) {
-              inAmount = amount;
-              type = 'credit';
-            } else {
-              out = amount;
-              type = 'debit';
-            }
-          } else if (amounts.length === 3) {
-            // Out, In, Balance
-            out = amounts[0];
-            inAmount = amounts[1];
-            balance = amounts[2];
-
-            if (inAmount > 0) {
-              amount = inAmount;
-              type = 'credit';
-            } else if (out > 0) {
-              amount = out;
-              type = 'debit';
-            }
-          }
-
-          // Clean description
-          desc = desc
-            .replace(/\s+/g, ' ')
-            .replace(/\bJT bal VW\b/gi, '') // Remove Nationwide-specific codes
-            .trim();
-
-          if (amount > 0 && desc) {
-            transactions.push({
-              date: currentDate,
-              description: desc,
-              amount,
-              balance,
-              type,
-            });
-
-            if (transactions.length <= 5) {
-              console.log(`✓ ${currentDate} | ${desc.substring(0, 30)} | ${type} £${amount} | Bal: £${balance}`);
-            }
-          }
-        }
+        // Process this line as a transaction
+        this.processNationwideLine(restOfLine, currentDate, transactions);
+      } else if (currentDate && line.match(/^[A-Z]/)) {
+        // No date prefix, but line starts with uppercase letter
+        // This is likely a same-day transaction (shares date with previous line)
+        // Example: "ADIDAS FELTHAM GB 72.70 20,210.80"
+        console.log(`Found same-day transaction: ${line.substring(0, 60)}...`);
+        this.processNationwideLine(line, currentDate, transactions);
       }
     }
 
     console.log(`Extracted ${transactions.length} Nationwide transactions`);
     return transactions;
+  }
+
+  private processNationwideLine(line: string, currentDate: string, transactions: Transaction[]): void {
+    // Nationwide format: "Description Out In Balance" or "Description Amount Balance"
+    // Extract all numbers (Out, In, Balance)
+    const numbers = line.match(/[\d,]+\.?\d{0,2}/g);
+
+    if (numbers && numbers.length >= 1) {
+      const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
+
+      // Find where the first number appears
+      const firstNumberIndex = line.indexOf(numbers[0]);
+      let desc = line.substring(0, firstNumberIndex).trim();
+
+      // Determine transaction type based on number count and position
+      let out = 0;
+      let inAmount = 0;
+      let balance = 0;
+      let amount = 0;
+      let type: 'credit' | 'debit' = 'debit';
+
+      if (amounts.length === 1) {
+        // Only balance (no transaction amount)
+        balance = amounts[0];
+        return; // Skip lines with only balance
+      } else if (amounts.length === 2) {
+        // Either Out+Balance or In+Balance
+        amount = amounts[0];
+        balance = amounts[1];
+
+        // Check if description suggests credit
+        const lower = desc.toLowerCase();
+        if (lower.includes('bank credit') ||
+            lower.includes('automated credit') ||
+            lower.includes('credit transfer') ||
+            lower.includes('paid in')) {
+          inAmount = amount;
+          type = 'credit';
+        } else {
+          out = amount;
+          type = 'debit';
+        }
+      } else if (amounts.length === 3) {
+        // Out, In, Balance
+        out = amounts[0];
+        inAmount = amounts[1];
+        balance = amounts[2];
+
+        if (inAmount > 0) {
+          amount = inAmount;
+          type = 'credit';
+        } else if (out > 0) {
+          amount = out;
+          type = 'debit';
+        }
+      }
+
+      // Clean description
+      desc = desc
+        .replace(/\s+/g, ' ')
+        .replace(/\bJT bal VW\b/gi, '') // Remove Nationwide-specific codes
+        .trim();
+
+      if (amount > 0 && desc) {
+        transactions.push({
+          date: currentDate,
+          description: desc,
+          amount,
+          balance,
+          type,
+        });
+
+        if (transactions.length <= 10) {
+          console.log(`✓ ${currentDate} | ${desc.substring(0, 30)} | ${type} £${amount} | Bal: £${balance}`);
+        }
+      }
+    }
   }
 
   private extractSantanderTransactions(text: string): Transaction[] {
