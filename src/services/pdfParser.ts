@@ -2,14 +2,17 @@ import * as pdfParse from "pdf-parse";
 import { Transaction, ParsedStatement } from "../types/index.js";
 import { MetroBankCoordinateParser } from "./metroBankCoordinateParser.js";
 import { GenericCoordinateParser } from "./genericCoordinateParser.js";
+import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
 
 export class PDFParser {
   private metroBankParser: MetroBankCoordinateParser;
   private genericCoordinateParser: GenericCoordinateParser;
+  private hsbcParser: HSBCCoordinateParser;
 
   constructor() {
     this.metroBankParser = new MetroBankCoordinateParser();
     this.genericCoordinateParser = new GenericCoordinateParser();
+    this.hsbcParser = new HSBCCoordinateParser();
   }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean }> {
     try {
@@ -2852,10 +2855,10 @@ export class PDFParser {
 
   private async extractHSBCTransactionsCoordinate(buffer: Buffer, parsedText: string): Promise<Transaction[]> {
     try {
-      // Use the generic coordinate-based parser which handles chaotic text ordering
-      // HSBC PDFs have similar issues to Metro Bank - text extraction is scrambled
-      console.log('Using coordinate-based parser for HSBC statement...');
-      const transactions = await this.genericCoordinateParser.parseStatement(buffer, false);
+      // Use the HSBC-specific coordinate-based parser
+      // HSBC PDFs have chaotic text extraction similar to Metro Bank
+      console.log('Using HSBC-specific coordinate parser...');
+      const transactions = await this.hsbcParser.parseHSBCStatement(buffer, parsedText, false);
 
       if (transactions.length === 0) {
         console.log('⚠️  Coordinate parser returned 0 transactions, falling back to text-based parser');
