@@ -2854,23 +2854,9 @@ export class PDFParser {
   }
 
   private async extractHSBCTransactionsCoordinate(buffer: Buffer, parsedText: string): Promise<Transaction[]> {
-    try {
-      // Use the HSBC-specific coordinate-based parser
-      // HSBC PDFs have chaotic text extraction similar to Metro Bank
-      console.log('Using HSBC-specific coordinate parser...');
-      const transactions = await this.hsbcParser.parseHSBCStatement(buffer, parsedText, false);
-
-      if (transactions.length === 0) {
-        console.log('⚠️  Coordinate parser returned 0 transactions, falling back to text-based parser');
-        return this.extractHSBCTransactions(parsedText);
-      }
-
-      return transactions;
-    } catch (error) {
-      console.error('⚠️  Coordinate-based HSBC parser failed, falling back to text-based parser:', error);
-      // Fallback to text-based parser if coordinate parsing fails
-      return this.extractHSBCTransactions(parsedText);
-    }
+    // HSBC PDFs are too chaotic for coordinate parsing - use enhanced text parser
+    console.log('⚠️  HSBC coordinate parser disabled - using text-based parser with enhancements');
+    return this.extractHSBCTransactions(parsedText);
   }
 
   // Extract transactions from Revolut bank statements
