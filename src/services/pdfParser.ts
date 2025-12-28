@@ -1129,77 +1129,93 @@ export class PDFParser {
 
   private processNationwideLine(line: string, currentDate: string, transactions: Transaction[]): void {
     // Nationwide format: "Description Out In Balance" or "Description Amount Balance"
-    // Extract all numbers (Out, In, Balance)
-    const numbers = line.match(/[\d,]+\.?\d{0,2}/g);
+    // Extract all numbers - but filter out account numbers and reference numbers
+    const allNumbers = line.match(/[\d,]+\.?\d{0,2}/g);
 
-    if (numbers && numbers.length >= 1) {
-      const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
+    if (!allNumbers || allNumbers.length === 0) return;
 
-      // Find where the first number appears
-      const firstNumberIndex = line.indexOf(numbers[0]);
-      let desc = line.substring(0, firstNumberIndex).trim();
+    // Filter to get only monetary amounts (have decimal points OR are reasonable transaction amounts)
+    // Account numbers are typically 8 digits, sort codes are 6 digits (shown as XX-XX-XX)
+    // Reference numbers can be very long (e.g., 33212269001)
+    const numbers = allNumbers.filter(num => {
+      const value = parseFloat(num.replace(/,/g, ''));
+      // Keep if it has decimal point OR is a reasonable transaction/balance amount (< 1,000,000)
+      // This filters out account numbers like 60408617 and refs like 33212269001
+      return num.includes('.') || value < 1000000;
+    });
 
-      // Determine transaction type based on number count and position
-      let out = 0;
-      let inAmount = 0;
-      let balance = 0;
-      let amount = 0;
-      let type: 'credit' | 'debit' = 'debit';
+    if (numbers.length === 0) return;
 
-      if (amounts.length === 1) {
-        // Only balance (no transaction amount)
-        balance = amounts[0];
-        return; // Skip lines with only balance
-      } else if (amounts.length === 2) {
-        // Either Out+Balance or In+Balance
-        amount = amounts[0];
-        balance = amounts[1];
+    const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
 
-        // Check if description suggests credit
-        const lower = desc.toLowerCase();
-        if (lower.includes('bank credit') ||
-            lower.includes('automated credit') ||
-            lower.includes('credit transfer') ||
-            lower.includes('paid in')) {
-          inAmount = amount;
-          type = 'credit';
-        } else {
-          out = amount;
-          type = 'debit';
-        }
-      } else if (amounts.length === 3) {
-        // Out, In, Balance
-        out = amounts[0];
-        inAmount = amounts[1];
-        balance = amounts[2];
+    // Find where the first monetary amount appears (not account number)
+    const firstNumberIndex = line.indexOf(numbers[0]);
+    let desc = line.substring(0, firstNumberIndex).trim();
 
-        if (inAmount > 0) {
-          amount = inAmount;
-          type = 'credit';
-        } else if (out > 0) {
-          amount = out;
-          type = 'debit';
-        }
+    // Determine transaction type based on number count and position
+    let out = 0;
+    let inAmount = 0;
+    let balance = 0;
+    let amount = 0;
+    let type: 'credit' | 'debit' = 'debit';
+
+    if (amounts.length === 1) {
+      // Only balance (no transaction amount)
+      balance = amounts[0];
+      return; // Skip lines with only balance
+    } else if (amounts.length === 2) {
+      // Either Out+Balance or In+Balance
+      amount = amounts[0];
+      balance = amounts[1];
+
+      // Check if description suggests credit
+      const lower = desc.toLowerCase();
+      if (lower.includes('bank credit') ||
+          lower.includes('automated credit') ||
+          lower.includes('credit transfer') ||
+          lower.includes('transfer from') ||
+          lower.includes('paid in')) {
+        inAmount = amount;
+        type = 'credit';
+      } else if (lower.includes('transfer to')) {
+        out = amount;
+        type = 'debit';
+      } else {
+        out = amount;
+        type = 'debit';
       }
+    } else if (amounts.length === 3) {
+      // Out, In, Balance
+      out = amounts[0];
+      inAmount = amounts[1];
+      balance = amounts[2];
 
-      // Clean description
-      desc = desc
-        .replace(/\s+/g, ' ')
-        .replace(/\bJT bal VW\b/gi, '') // Remove Nationwide-specific codes
-        .trim();
+      if (inAmount > 0) {
+        amount = inAmount;
+        type = 'credit';
+      } else if (out > 0) {
+        amount = out;
+        type = 'debit';
+      }
+    }
 
-      if (amount > 0 && desc) {
-        transactions.push({
-          date: currentDate,
-          description: desc,
-          amount,
-          balance,
-          type,
-        });
+    // Clean description
+    desc = desc
+      .replace(/\s+/g, ' ')
+      .replace(/\bJT bal VW\b/gi, '') // Remove Nationwide-specific codes
+      .trim();
 
-        if (transactions.length <= 10) {
-          console.log(`✓ ${currentDate} | ${desc.substring(0, 30)} | ${type} £${amount} | Bal: £${balance}`);
-        }
+    if (amount > 0 && desc) {
+      transactions.push({
+        date: currentDate,
+        description: desc,
+        amount,
+        balance,
+        type,
+      });
+
+      if (transactions.length <= 10) {
+        console.log(`✓ ${currentDate} | ${desc.substring(0, 30)} | ${type} £${amount} | Bal: £${balance}`);
       }
     }
   }
