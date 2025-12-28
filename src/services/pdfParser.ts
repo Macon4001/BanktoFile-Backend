@@ -3296,8 +3296,19 @@ export class PDFParser {
       return;
     }
 
-    // Parse numbers
-    const amounts = numbers.map(n => parseFloat(n.replace(/,/g, '')));
+    // Parse numbers and filter out unreasonably large amounts (likely concatenated)
+    // Normal bank transaction: £0.01 to £100,000 (most personal transactions under £10k)
+    // Garbage concatenated numbers: £775975.02, £844332529338.19
+    const MAX_REASONABLE_AMOUNT = 1000000; // £1 million max per transaction
+    const amounts = numbers
+      .map(n => parseFloat(n.replace(/,/g, '')))
+      .filter(n => n < MAX_REASONABLE_AMOUNT);
+
+    if (amounts.length === 0) {
+      // All amounts were unreasonably large (likely concatenated numbers)
+      console.log(`⚠️  Skipping line with unreasonably large amounts (>£${MAX_REASONABLE_AMOUNT}): ${line.substring(0, 60)}`);
+      return;
+    }
 
     let amount = 0;
     let balance = 0;
