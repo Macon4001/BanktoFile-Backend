@@ -1070,14 +1070,15 @@ export class PDFParser {
       }
 
       // Handle opening balance specially
-      // Format: "2025Balance from statement 47 dated 05/02/2025313.41" (may have no spaces)
+      // Format: "2022 Balance from statement 79 dated 01/12/2022 35,218.54"
+      // Or: "2025Balance from statement 47 dated 05/02/2025313.41" (may have no spaces)
       if (line.includes('Balance from statement') && line.includes('dated')) {
         // Match the date pattern first: dated DD/MM/YYYY
         const dateMatch = line.match(/dated\s*(\d{2})\/(\d{2})\/(\d{4})/i);
 
         if (dateMatch) {
-          // Everything after the year in the date is the balance
-          const afterDateMatch = line.match(/dated\s*\d{2}\/\d{2}\/\d{4}([\d,]+\.?\d{0,2})/i);
+          // Everything after the year in the date is the balance (with optional space)
+          const afterDateMatch = line.match(/dated\s*\d{2}\/\d{2}\/\d{4}\s*([\d,]+\.?\d{0,2})/i);
 
           if (afterDateMatch) {
             const balance = parseFloat(afterDateMatch[1].replace(/,/g, ''));
