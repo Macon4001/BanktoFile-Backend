@@ -3295,20 +3295,16 @@ export class PDFParser {
     // Extract amounts and balance from the line
     // Format: "Description Amount [Balance]"
     // The balance is optional and appears at the end
-    // IMPORTANT: Only match numbers with decimal points to avoid reference numbers
-    // Valid amounts: 74.88, 5975.02, 1,234.56
-    // Invalid (reference numbers): 16-11094-64, 230DZ, 293
-    const allNumbers = description.match(/[\d,]+\.?\d{0,2}/g);
+    // IMPORTANT: Match decimal numbers even when concatenated with text
+    // Examples:
+    // - "COVENTRY10.00" → 10.00
+    // - "Northampton20.00" → 20.00
+    // - "Help 200.00 6196.30" → 200.00, 6196.30
+    // Match pattern: digits followed by dot and 1-2 digits (required decimal point)
+    const numbers = description.match(/\d+\.\d{1,2}/g);
 
-    if (!allNumbers || allNumbers.length === 0) {
-      return; // No numbers found
-    }
-
-    // Filter to only monetary amounts (must have decimal point)
-    const numbers = allNumbers.filter(n => n.includes('.'));
-
-    if (numbers.length === 0) {
-      // No decimal numbers found, might be reference numbers only
+    if (!numbers || numbers.length === 0) {
+      // No decimal numbers found
       console.log(`⚠️  Skipping line with no decimal amounts: ${line.substring(0, 60)}`);
       return;
     }
