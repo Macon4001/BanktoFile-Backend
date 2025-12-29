@@ -3114,6 +3114,7 @@ export class PDFParser {
     return text
       .replace(/\s+/g, ' ')           // Normalize whitespace
       .replace(/\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(20)?(\d{2})\b/gi, '$1 $2 $4') // Normalize year format
+      .replace(/\b(CR|DD|SO|BP|FP|TFR|VIS)\s*/gi, '') // Remove transaction type prefixes
       .replace(/[^a-z0-9\s]/gi, '')   // Remove special characters
       .toLowerCase()
       .trim();
@@ -3210,7 +3211,13 @@ export class PDFParser {
               const normalizedExistingText = existing._source?.rawText ? this.normalizeRawText(existing._source.rawText) : '';
               const normalizedCurrentText = txn._source?.rawText ? this.normalizeRawText(txn._source.rawText) : '';
 
+              console.log(`  🔍 Cross-pass comparison for: ${txn.date} | ${txn.description} | £${txn.amount}`);
+              console.log(`      → Pass ${existing._source?.passNumber} text: "${normalizedExistingText.substring(0, 60)}..."`);
+              console.log(`      → Pass ${txn._source?.passNumber} text: "${normalizedCurrentText.substring(0, 60)}..."`);
+
               const similarity = this.calculateSimilarity(normalizedExistingText, normalizedCurrentText);
+              console.log(`      → Similarity: ${(similarity * 100).toFixed(1)}%`);
+
               const textsAreSimilar = similarity > 0.8 &&
                                      normalizedExistingText.length > 0 &&
                                      normalizedCurrentText.length > 0;
@@ -3220,6 +3227,8 @@ export class PDFParser {
                 console.log(`      → Cross-pass: ${existing._source?.passNumber} vs ${txn._source?.passNumber}, similarity=${(similarity * 100).toFixed(1)}%`);
                 duplicatesRemoved.push(key);
                 return true;
+              } else {
+                console.log(`      → Not similar enough (threshold: 80%)`);
               }
             }
 
