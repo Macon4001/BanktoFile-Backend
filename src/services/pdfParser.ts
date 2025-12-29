@@ -115,6 +115,17 @@ export class PDFParser {
       };
     } catch (error) {
       console.error("Error parsing PDF:", error);
+
+      // Check if the error is due to password protection
+      if (error && typeof error === 'object' && 'code' in error && error.code === 1) {
+        throw new Error("This PDF is password-protected. Please remove the password and try again.");
+      }
+
+      // Check for password-related error messages
+      if (error instanceof Error && error.message.toLowerCase().includes('password')) {
+        throw new Error("This PDF is password-protected. Please remove the password and try again.");
+      }
+
       throw new Error("Failed to parse PDF file");
     }
   }
