@@ -13,6 +13,7 @@ interface TransactionSource {
   yCoordinate?: number;    // For coordinate-based parsing
   passNumber: 1 | 2;       // Which parsing pass created it
   rawText: string;         // Exact text that created this transaction
+  batchIndex?: number;     // Position within Pass 1 reconstruction batch
 }
 
 /**
@@ -3149,26 +3150,58 @@ export class PDFParser {
         for (const txn of txnGroup) {
           // Check if this transaction is from a different source than existing ones
           const isDuplicate = uniqueSources.some(existing => {
-            // Normalize raw texts for comparison
-            const normalizedExistingText = existing._source?.rawText ? this.normalizeRawText(existing._source.rawText) : '';
-            const normalizedCurrentText = txn._source?.rawText ? this.normalizeRawText(txn._source.rawText) : '';
+            // Compare source metadata to determine if this is a true duplicate
 
-            // Check if texts are similar
-            const similarity = this.calculateSimilarity(normalizedExistingText, normalizedCurrentText);
-            const textsAreSimilar = similarity > 0.8; // 80% similarity threshold
+            // Case 1: Both from Pass 1 (reconstruction) - check batchIndex
+            if (existing._source?.passNumber === 1 && txn._source?.passNumber === 1) {
+              // If same batchIndex, they're from the exact same reconstruction = duplicate
+              const sameBatchIndex = existing._source?.batchIndex === txn._source?.batchIndex &&
+                                    txn._source?.batchIndex !== undefined;
 
-            // Compare source metadata
-            const sameLineIndex = existing._source?.lineIndex === txn._source?.lineIndex;
-            const similarRawText = textsAreSimilar && normalizedExistingText.length > 0 && normalizedCurrentText.length > 0;
+              if (sameBatchIndex) {
+                console.log(`  🗑️  REMOVING parser duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
+                console.log(`      → Same Pass 1 batch: batchIndex=${txn._source?.batchIndex}`);
+                console.log(`      → Existing text: "${existing._source?.rawText?.substring(0, 40)}..."`);
+                console.log(`      → Current text:  "${txn._source?.rawText?.substring(0, 40)}..."`);
+                duplicatesRemoved.push(key);
+                return true;
+              }
 
-            // If from same source, it's a duplicate
-            if ((sameLineIndex && txn._source?.lineIndex !== undefined) || similarRawText) {
-              console.log(`  🗑️  REMOVING parser duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
-              console.log(`      → Same source: lineIndex=${txn._source?.lineIndex}, similarity=${(similarity * 100).toFixed(1)}%`);
-              console.log(`      → Existing text: "${existing._source?.rawText?.substring(0, 40)}..."`);
-              console.log(`      → Current text:  "${txn._source?.rawText?.substring(0, 40)}..."`);
-              duplicatesRemoved.push(key);
-              return true;
+              // Different batchIndex = separate real transactions from same date
+              console.log(`      → Different batches (${existing._source?.batchIndex} vs ${txn._source?.batchIndex}) - keeping both`);
+              return false;
+            }
+
+            // Case 2: Both from Pass 2 (line-by-line) - check lineIndex
+            if (existing._source?.passNumber === 2 && txn._source?.passNumber === 2) {
+              const sameLineIndex = existing._source?.lineIndex === txn._source?.lineIndex &&
+                                   txn._source?.lineIndex !== undefined;
+
+              if (sameLineIndex) {
+                console.log(`  🗑️  REMOVING parser duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
+                console.log(`      → Same Pass 2 line: lineIndex=${txn._source?.lineIndex}`);
+                duplicatesRemoved.push(key);
+                return true;
+              }
+              return false;
+            }
+
+            // Case 3: One from Pass 1, one from Pass 2 - check text similarity
+            if (existing._source?.passNumber !== txn._source?.passNumber) {
+              const normalizedExistingText = existing._source?.rawText ? this.normalizeRawText(existing._source.rawText) : '';
+              const normalizedCurrentText = txn._source?.rawText ? this.normalizeRawText(txn._source.rawText) : '';
+
+              const similarity = this.calculateSimilarity(normalizedExistingText, normalizedCurrentText);
+              const textsAreSimilar = similarity > 0.8 &&
+                                     normalizedExistingText.length > 0 &&
+                                     normalizedCurrentText.length > 0;
+
+              if (textsAreSimilar) {
+                console.log(`  🗑️  REMOVING cross-pass duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
+                console.log(`      → Cross-pass: ${existing._source?.passNumber} vs ${txn._source?.passNumber}, similarity=${(similarity * 100).toFixed(1)}%`);
+                duplicatesRemoved.push(key);
+                return true;
+              }
             }
 
             return false;
@@ -3176,7 +3209,7 @@ export class PDFParser {
 
           if (!isDuplicate) {
             console.log(`  ✅ KEEPING: ${txn.date} | ${txn.description} | £${txn.amount}`);
-            console.log(`      → Source: pass=${txn._source?.passNumber}, text="${txn._source?.rawText?.substring(0, 40)}..."`);
+            console.log(`      → Source: pass=${txn._source?.passNumber}, batch=${txn._source?.batchIndex}, text="${txn._source?.rawText?.substring(0, 40)}..."`);
             uniqueSources.push(txn);
           }
         }
@@ -3394,9 +3427,11 @@ export class PDFParser {
               const lineWithoutDate = txn.replace(/^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2}\s+/i, '');
 
               // Create source metadata for Pass 1 (reconstruction)
+              // Use idx to track position within this reconstruction batch
               const source: TransactionSource = {
                 passNumber: 1,
                 rawText: txn,
+                batchIndex: idx,
               };
 
               const beforeCount = transactions.length;
@@ -3782,7 +3817,8 @@ export class PDFParser {
     if (amounts.length === 1) {
       // Only one number - could be amount or balance
       // If line has description text before the number, it's likely the amount
-      const firstNumberIndex = description.search(/[\d,]+\.?\d{0,2}/);
+      // Use same regex as extraction to find the actual decimal amount (not embedded digits)
+      const firstNumberIndex = description.search(/\d+\.\d{1,2}/);
       const textBeforeNumber = description.substring(0, firstNumberIndex).trim();
 
       if (textBeforeNumber.length > 2) {
@@ -3799,8 +3835,9 @@ export class PDFParser {
       balance = amounts[amounts.length - 1];
     }
 
-    // Extract description (everything before the first number)
-    const firstNumberIndex = description.search(/[\d,]+\.?\d{0,2}/);
+    // Extract description (everything before the first decimal number)
+    // Use same regex as extraction to find actual decimal amounts (not embedded digits like "H3G")
+    const firstNumberIndex = description.search(/\d+\.\d{1,2}/);
     if (firstNumberIndex > 0) {
       description = description.substring(0, firstNumberIndex).trim();
     }
