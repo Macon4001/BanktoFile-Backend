@@ -4,6 +4,24 @@ import { MetroBankCoordinateParser } from "./metroBankCoordinateParser.js";
 import { GenericCoordinateParser } from "./genericCoordinateParser.js";
 import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
 
+/**
+ * Internal metadata to track where a transaction was parsed from
+ * Used for intelligent duplicate detection
+ */
+interface TransactionSource {
+  lineIndex?: number;      // For text-based parsing
+  yCoordinate?: number;    // For coordinate-based parsing
+  passNumber: 1 | 2;       // Which parsing pass created it
+  rawText: string;         // Exact text that created this transaction
+}
+
+/**
+ * Transaction with source metadata (used internally during parsing)
+ */
+interface TransactionWithSource extends Transaction {
+  _source?: TransactionSource;
+}
+
 export class PDFParser {
   private metroBankParser: MetroBankCoordinateParser;
   private genericCoordinateParser: GenericCoordinateParser;
@@ -3080,8 +3098,62 @@ export class PDFParser {
     return transactions;
   }
 
+  /**
+   * Smart deduplication: Removes parser-created duplicates while keeping real duplicates
+   * Uses source metadata to distinguish between:
+   * - Parser duplicates: Same transaction parsed twice from the same source
+   * - Real duplicates: Multiple identical transactions from different sources in the PDF
+   */
+  private deduplicateHSBCTransactions(transactions: TransactionWithSource[]): Transaction[] {
+    console.log(`\n========== SMART DEDUPLICATION ==========`);
+    console.log(`Input: ${transactions.length} transactions`);
+
+    const seen = new Map<string, TransactionWithSource>();
+    const duplicatesRemoved: string[] = [];
+
+    for (const txn of transactions) {
+      // Create unique key based on transaction data
+      const key = `${txn.date}|${txn.description}|${txn.amount}|${txn.type}`;
+
+      if (seen.has(key)) {
+        const existing = seen.get(key)!;
+
+        // Compare source metadata to determine if this is a parser duplicate or real duplicate
+        const sameLineIndex = existing._source?.lineIndex === txn._source?.lineIndex;
+        const sameRawText = existing._source?.rawText === txn._source?.rawText;
+        const samePass = existing._source?.passNumber === txn._source?.passNumber;
+
+        // If from same source (line index OR raw text match), it's a parser duplicate
+        if ((sameLineIndex && txn._source?.lineIndex !== undefined) ||
+            (sameRawText && txn._source?.rawText)) {
+          console.log(`  🗑️  REMOVING parser duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
+          console.log(`      → Same source: lineIndex=${txn._source?.lineIndex}, rawText="${txn._source?.rawText?.substring(0, 30)}..."`);
+          duplicatesRemoved.push(key);
+          continue; // Skip this duplicate
+        } else {
+          // Different sources - this is a REAL duplicate from the PDF
+          console.log(`  ✅ KEEPING real duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
+          console.log(`      → Different sources:`);
+          console.log(`         Existing: lineIndex=${existing._source?.lineIndex}, pass=${existing._source?.passNumber}`);
+          console.log(`         Current:  lineIndex=${txn._source?.lineIndex}, pass=${txn._source?.passNumber}`);
+          // Don't add to seen map - allow multiple real duplicates
+        }
+      }
+
+      seen.set(key + Math.random(), txn); // Add random suffix to allow real duplicates
+    }
+
+    // Remove source metadata before returning
+    const cleanedTransactions: Transaction[] = Array.from(seen.values()).map(({ _source, ...txn }) => txn);
+
+    console.log(`Output: ${cleanedTransactions.length} transactions (removed ${duplicatesRemoved.length} parser duplicates)`);
+    console.log(`==========================================\n`);
+
+    return cleanedTransactions;
+  }
+
   private extractHSBCTransactions(text: string): Transaction[] {
-    const transactions: Transaction[] = [];
+    const transactions: TransactionWithSource[] = [];
     const lines = text.split('\n');
 
     console.log('Parsing HSBC statement...');
@@ -3257,8 +3329,14 @@ export class PDFParser {
               // Remove the date prefix before processing
               const lineWithoutDate = txn.replace(/^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2}\s+/i, '');
 
+              // Create source metadata for Pass 1 (reconstruction)
+              const source: TransactionSource = {
+                passNumber: 1,
+                rawText: txn,
+              };
+
               const beforeCount = transactions.length;
-              this.processHSBCLine(lineWithoutDate, dateStr, transactions);
+              this.processHSBCLine(lineWithoutDate, dateStr, transactions, source);
               const afterCount = transactions.length;
               if (afterCount > beforeCount) {
                 console.log(`    ✅ Successfully added transaction (total: ${afterCount})`);
@@ -3453,7 +3531,13 @@ export class PDFParser {
 
         // Process the rest of the line as transaction (if there's content)
         if (restOfLine && restOfLine.trim().length > 0) {
-          this.processHSBCLine(restOfLine, currentDate, transactions);
+          // Create source metadata for Pass 2 (line-by-line with date prefix)
+          const source: TransactionSource = {
+            lineIndex: i,
+            passNumber: 2,
+            rawText: `${currentDate} ${restOfLine}`,
+          };
+          this.processHSBCLine(restOfLine, currentDate, transactions, source);
         }
       } else if (currentDate && line.match(/^(CR|BP|VIS|DD|\)\)\))/)) {
         // Same-day transaction (no date prefix, but has transaction type prefix)
@@ -3506,44 +3590,37 @@ export class PDFParser {
         if (processedDescriptions.has(descKey)) {
           console.log(`  ↳ Skipping already-processed transaction from reconstruction: ${descKey.substring(0, 50)}...`);
         } else {
-          this.processHSBCLine(fullLine, currentDate, transactions);
+          // Create source metadata for Pass 2 (line-by-line same-day transaction)
+          const source: TransactionSource = {
+            lineIndex: i,
+            passNumber: 2,
+            rawText: fullLine,
+          };
+          this.processHSBCLine(fullLine, currentDate, transactions, source);
         }
       }
     }
 
-    // Deduplicate transactions - but allow multiple identical transactions on the same date
-    // Strategy: Count occurrences per unique key and only keep the first N occurrences
-    // This allows legitimate duplicate transactions (e.g., two £500 payments on same day)
-    // while removing cross-page PDF repetitions
-    const transactionCounts = new Map<string, number>();
-    const uniqueTransactions: Transaction[] = [];
-
-    for (const txn of transactions) {
-      const key = `${txn.date}|${txn.description}|${txn.amount}|${txn.type}`;
-      const count = transactionCounts.get(key) || 0;
-
-      // Allow up to 10 identical transactions (should be more than enough for legitimate cases)
-      // This protects against accidental infinite loops while allowing real duplicates
-      if (count < 10) {
-        transactionCounts.set(key, count + 1);
-        uniqueTransactions.push(txn);
-      } else {
-        console.log(`⚠️  Skipping excessive duplicate (>${count}): ${txn.date} | ${txn.description} | £${txn.amount}`);
-      }
-    }
+    // Apply smart deduplication using source metadata
+    const deduplicatedTransactions = this.deduplicateHSBCTransactions(transactions);
 
     // Sort transactions by date (chronological order)
-    uniqueTransactions.sort((a, b) => {
+    deduplicatedTransactions.sort((a, b) => {
       const dateA = new Date(a.date);
       const dateB = new Date(b.date);
       return dateA.getTime() - dateB.getTime();
     });
 
-    console.log(`Extracted ${transactions.length} HSBC transactions (${uniqueTransactions.length} unique, sorted by date)`);
-    return uniqueTransactions;
+    console.log(`Extracted ${transactions.length} HSBC transactions (${deduplicatedTransactions.length} after smart deduplication, sorted by date)`);
+    return deduplicatedTransactions;
   }
 
-  private processHSBCLine(line: string, currentDate: string, transactions: Transaction[]): void {
+  private processHSBCLine(
+    line: string,
+    currentDate: string,
+    transactions: TransactionWithSource[],
+    source?: TransactionSource
+  ): void {
     // HSBC transaction types:
     // CR = Credit (money in)
     // BP = Bill Payment / Payment out (money out)
@@ -3664,14 +3741,21 @@ export class PDFParser {
       description = description.substring(0, firstNumberIndex).trim();
     }
 
-    // Add transaction
-    transactions.push({
+    // Add transaction with source metadata
+    const transaction: TransactionWithSource = {
       date: currentDate,
       description: description || 'HSBC Transaction',
       amount,
       balance,
       type,
-    });
+    };
+
+    // Attach source metadata if provided
+    if (source) {
+      transaction._source = source;
+    }
+
+    transactions.push(transaction);
 
     console.log(`✓ ${currentDate} | ${type === 'credit' ? 'IN' : 'OUT'} | ${description} | £${amount} | Balance: £${balance}`);
   }
