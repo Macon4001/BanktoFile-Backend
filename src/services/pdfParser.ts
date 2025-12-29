@@ -3723,10 +3723,24 @@ export class PDFParser {
     const deduplicatedTransactions = this.deduplicateHSBCTransactions(transactions);
 
     // Sort transactions by date (chronological order)
+    // Within same date: BROUGHT FORWARD first, regular transactions middle, CARRIED FORWARD last
     deduplicatedTransactions.sort((a, b) => {
       const dateA = new Date(a.date);
       const dateB = new Date(b.date);
-      return dateA.getTime() - dateB.getTime();
+      const timeDiff = dateA.getTime() - dateB.getTime();
+
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+
+      // Same date - order by transaction type
+      // BROUGHT FORWARD = -1 (first)
+      // Regular transactions = 0 (middle)
+      // CARRIED FORWARD = 1 (last)
+      const priorityA = a.type === 'brought_forward' ? -1 : (a.type === 'carried_forward' ? 1 : 0);
+      const priorityB = b.type === 'brought_forward' ? -1 : (b.type === 'carried_forward' ? 1 : 0);
+
+      return priorityA - priorityB;
     });
 
     console.log(`Extracted ${transactions.length} HSBC transactions (${deduplicatedTransactions.length} after smart deduplication, sorted by date)`);
