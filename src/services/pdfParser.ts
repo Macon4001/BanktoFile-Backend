@@ -3121,53 +3121,74 @@ export class PDFParser {
     console.log(`\n========== SMART DEDUPLICATION ==========`);
     console.log(`Input: ${transactions.length} transactions`);
 
-    const seen = new Map<string, TransactionWithSource>();
+    const seenKeys = new Map<string, TransactionWithSource[]>(); // Track all transactions per key
     const duplicatesRemoved: string[] = [];
+    const keptTransactions: TransactionWithSource[] = [];
 
+    // Group transactions by key
     for (const txn of transactions) {
-      // Create unique key based on transaction data
       const key = `${txn.date}|${txn.description}|${txn.amount}|${txn.type}`;
 
-      if (seen.has(key)) {
-        const existing = seen.get(key)!;
-
-        // Normalize raw texts for comparison
-        const normalizedExistingText = existing._source?.rawText ? this.normalizeRawText(existing._source.rawText) : '';
-        const normalizedCurrentText = txn._source?.rawText ? this.normalizeRawText(txn._source.rawText) : '';
-
-        // Check if texts are similar (allow up to 20% difference for minor variations)
-        const similarity = this.calculateSimilarity(normalizedExistingText, normalizedCurrentText);
-        const textsAreSimilar = similarity > 0.8; // 80% similarity threshold
-
-        // Compare source metadata to determine if this is a parser duplicate or real duplicate
-        const sameLineIndex = existing._source?.lineIndex === txn._source?.lineIndex;
-        const similarRawText = textsAreSimilar && normalizedExistingText.length > 0 && normalizedCurrentText.length > 0;
-
-        // If from same source (line index OR similar raw text), it's a parser duplicate
-        if ((sameLineIndex && txn._source?.lineIndex !== undefined) || similarRawText) {
-          console.log(`  🗑️  REMOVING parser duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
-          console.log(`      → Same source: lineIndex=${txn._source?.lineIndex}, similarity=${(similarity * 100).toFixed(1)}%`);
-          console.log(`      → Existing text: "${existing._source?.rawText?.substring(0, 40)}..."`);
-          console.log(`      → Current text:  "${txn._source?.rawText?.substring(0, 40)}..."`);
-          duplicatesRemoved.push(key);
-          continue; // Skip this duplicate
-        } else {
-          // Different sources - this is a REAL duplicate from the PDF
-          console.log(`  ✅ KEEPING real duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
-          console.log(`      → Different sources (similarity=${(similarity * 100).toFixed(1)}%):`);
-          console.log(`         Existing: pass=${existing._source?.passNumber}, text="${existing._source?.rawText?.substring(0, 30)}..."`);
-          console.log(`         Current:  pass=${txn._source?.passNumber}, text="${txn._source?.rawText?.substring(0, 30)}..."`);
-          // Don't add to seen map - allow multiple real duplicates
-        }
+      if (!seenKeys.has(key)) {
+        seenKeys.set(key, []);
       }
+      seenKeys.get(key)!.push(txn);
+    }
 
-      seen.set(key + Math.random(), txn); // Add random suffix to allow real duplicates
+    // Process each group of duplicate transactions
+    for (const [key, txnGroup] of seenKeys.entries()) {
+      if (txnGroup.length === 1) {
+        // No duplicates, keep it
+        keptTransactions.push(txnGroup[0]);
+      } else {
+        // Multiple transactions with same key - determine which are parser duplicates
+        console.log(`\n  Found ${txnGroup.length} transactions with key: ${key}`);
+
+        const uniqueSources: TransactionWithSource[] = [];
+
+        for (const txn of txnGroup) {
+          // Check if this transaction is from a different source than existing ones
+          const isDuplicate = uniqueSources.some(existing => {
+            // Normalize raw texts for comparison
+            const normalizedExistingText = existing._source?.rawText ? this.normalizeRawText(existing._source.rawText) : '';
+            const normalizedCurrentText = txn._source?.rawText ? this.normalizeRawText(txn._source.rawText) : '';
+
+            // Check if texts are similar
+            const similarity = this.calculateSimilarity(normalizedExistingText, normalizedCurrentText);
+            const textsAreSimilar = similarity > 0.8; // 80% similarity threshold
+
+            // Compare source metadata
+            const sameLineIndex = existing._source?.lineIndex === txn._source?.lineIndex;
+            const similarRawText = textsAreSimilar && normalizedExistingText.length > 0 && normalizedCurrentText.length > 0;
+
+            // If from same source, it's a duplicate
+            if ((sameLineIndex && txn._source?.lineIndex !== undefined) || similarRawText) {
+              console.log(`  🗑️  REMOVING parser duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
+              console.log(`      → Same source: lineIndex=${txn._source?.lineIndex}, similarity=${(similarity * 100).toFixed(1)}%`);
+              console.log(`      → Existing text: "${existing._source?.rawText?.substring(0, 40)}..."`);
+              console.log(`      → Current text:  "${txn._source?.rawText?.substring(0, 40)}..."`);
+              duplicatesRemoved.push(key);
+              return true;
+            }
+
+            return false;
+          });
+
+          if (!isDuplicate) {
+            console.log(`  ✅ KEEPING: ${txn.date} | ${txn.description} | £${txn.amount}`);
+            console.log(`      → Source: pass=${txn._source?.passNumber}, text="${txn._source?.rawText?.substring(0, 40)}..."`);
+            uniqueSources.push(txn);
+          }
+        }
+
+        keptTransactions.push(...uniqueSources);
+      }
     }
 
     // Remove source metadata before returning
-    const cleanedTransactions: Transaction[] = Array.from(seen.values()).map(({ _source, ...txn }) => txn);
+    const cleanedTransactions: Transaction[] = keptTransactions.map(({ _source, ...txn }) => txn);
 
-    console.log(`Output: ${cleanedTransactions.length} transactions (removed ${duplicatesRemoved.length} parser duplicates)`);
+    console.log(`\nOutput: ${cleanedTransactions.length} transactions (removed ${duplicatesRemoved.length} parser duplicates)`);
     console.log(`==========================================\n`);
 
     return cleanedTransactions;
