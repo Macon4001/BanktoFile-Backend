@@ -3792,6 +3792,8 @@ export class PDFParser {
     // - "COVENTRY10.00" → 10.00
     // - "Northampton20.00" → 20.00
     // - "Help 200.00 6196.30" → 200.00, 6196.30
+    // - "Stuart Delivery Lt 775975.02" → need to extract 75.02 (not 775975.02)
+
     // Match pattern: digits followed by dot and 1-2 digits (required decimal point)
     const numbers = description.match(/\d+\.\d{1,2}/g);
 
@@ -3801,32 +3803,63 @@ export class PDFParser {
       return;
     }
 
-    // Parse numbers and filter out unreasonably large amounts (likely concatenated)
-    // Normal bank transaction: £0.01 to £100,000 (most personal transactions under £10k)
-    // Garbage concatenated numbers: £775975.02, £844332529338.19
-    // Also reject numbers with too many digits (concatenated): 775975.02 has 6 digits before decimal
-    const MAX_REASONABLE_AMOUNT = 100000; // £100k max per transaction (lowered from 1M)
-    const MAX_DIGITS_BEFORE_DECIMAL = 5; // Max 5 digits before decimal (99,999.99)
+    // Try to split concatenated reference numbers from amounts
+    // Example: "775975.02" might be "7759" + "75.02"
+    // Strategy: If a number looks concatenated (e.g., 775975.02), try to extract just the last decimal amount
+    const expandedNumbers: number[] = [];
 
-    const amounts = numbers
-      .map(n => parseFloat(n.replace(/,/g, '')))
-      .filter(n => {
-        // Check amount is reasonable
-        if (n >= MAX_REASONABLE_AMOUNT) return false;
+    for (const numStr of numbers) {
+      const num = parseFloat(numStr);
 
-        // Check digit count (detect concatenated numbers like 775975.02)
-        const digitsBeforeDecimal = Math.floor(n).toString().length;
-        if (digitsBeforeDecimal > MAX_DIGITS_BEFORE_DECIMAL) {
-          console.log(`⚠️  Rejecting amount £${n} - too many digits (${digitsBeforeDecimal})`);
-          return false;
+      // Check if this looks like a concatenated number (>£10,000 with many digits)
+      if (num > 10000) {
+        // Try to find the last valid decimal amount within this number
+        // Match patterns like ".XX" where XX is 1-2 digits
+        const decimalMatch = numStr.match(/\.(\d{1,2})$/);
+        if (decimalMatch) {
+          // Look backwards for a reasonable amount before the decimal
+          // Try to extract last 1-4 digits before decimal as the amount
+          const beforeDecimal = numStr.substring(0, numStr.indexOf('.'));
+
+          // Collect all potential amounts and pick the smallest reasonable one
+          const potentialAmounts: number[] = [];
+
+          for (let digits = 2; digits <= 4; digits++) {
+            if (beforeDecimal.length >= digits) {
+              const potentialAmount = beforeDecimal.substring(beforeDecimal.length - digits) + '.' + decimalMatch[1];
+              const parsed = parseFloat(potentialAmount);
+
+              // If this gives us a reasonable amount (< £10,000), collect it
+              if (parsed >= 10 && parsed < 10000) {
+                potentialAmounts.push(parsed);
+              }
+            }
+          }
+
+          // Pick the smallest amount (most likely the actual transaction amount, not with reference number)
+          if (potentialAmounts.length > 0) {
+            const smallest = Math.min(...potentialAmounts);
+            expandedNumbers.push(smallest);
+            console.log(`    → Split concatenated ${numStr} into £${smallest} (from options: ${potentialAmounts.join(', ')})`);
+          }
         }
 
-        return true;
-      });
+        // If we couldn't extract a reasonable amount, just skip this number
+        if (expandedNumbers.length === 0 || expandedNumbers[expandedNumbers.length - 1] === num) {
+          // Didn't add a split version, so skip this concatenated number
+          continue;
+        }
+      } else {
+        // Normal number, add as-is
+        expandedNumbers.push(num);
+      }
+    }
+
+    const amounts = expandedNumbers;
 
     if (amounts.length === 0) {
-      // All amounts were unreasonably large (likely concatenated numbers)
-      console.log(`⚠️  Skipping line with unreasonably large amounts (>£${MAX_REASONABLE_AMOUNT}): ${line.substring(0, 60)}`);
+      // All amounts were concatenated and couldn't be parsed
+      console.log(`⚠️  Skipping line - couldn't extract valid amounts: ${line.substring(0, 60)}`);
       return;
     }
 
