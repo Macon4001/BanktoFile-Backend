@@ -3126,9 +3126,10 @@ export class PDFParser {
     const duplicatesRemoved: string[] = [];
     const keptTransactions: TransactionWithSource[] = [];
 
-    // Group transactions by key
+    // Group transactions by key (normalize whitespace in description for grouping)
     for (const txn of transactions) {
-      const key = `${txn.date}|${txn.description}|${txn.amount}|${txn.type}`;
+      const normalizedDesc = txn.description.replace(/\s+/g, ' ').trim();
+      const key = `${txn.date}|${normalizedDesc}|${txn.amount}|${txn.type}`;
 
       if (!seenKeys.has(key)) {
         seenKeys.set(key, []);
@@ -3172,7 +3173,7 @@ export class PDFParser {
               return false;
             }
 
-            // Case 2: Both from Pass 2 (line-by-line) - check lineIndex
+            // Case 2: Both from Pass 2 (line-by-line) - check lineIndex and text similarity
             if (existing._source?.passNumber === 2 && txn._source?.passNumber === 2) {
               const sameLineIndex = existing._source?.lineIndex === txn._source?.lineIndex &&
                                    txn._source?.lineIndex !== undefined;
@@ -3183,6 +3184,23 @@ export class PDFParser {
                 duplicatesRemoved.push(key);
                 return true;
               }
+
+              // Also check text similarity for Pass 2 transactions (handles PDF formatting duplicates)
+              const normalizedExistingText = existing._source?.rawText ? this.normalizeRawText(existing._source.rawText) : '';
+              const normalizedCurrentText = txn._source?.rawText ? this.normalizeRawText(txn._source.rawText) : '';
+
+              const similarity = this.calculateSimilarity(normalizedExistingText, normalizedCurrentText);
+              const textsAreSimilar = similarity > 0.9 &&
+                                     normalizedExistingText.length > 0 &&
+                                     normalizedCurrentText.length > 0;
+
+              if (textsAreSimilar) {
+                console.log(`  🗑️  REMOVING Pass 2 duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
+                console.log(`      → Similar raw text in Pass 2: similarity=${(similarity * 100).toFixed(1)}%`);
+                duplicatesRemoved.push(key);
+                return true;
+              }
+
               return false;
             }
 
