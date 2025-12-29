@@ -3104,6 +3104,19 @@ export class PDFParser {
    * - Parser duplicates: Same transaction parsed twice from the same source
    * - Real duplicates: Multiple identical transactions from different sources in the PDF
    */
+  /**
+   * Normalize raw text for comparison
+   * Removes variations between Pass 1 and Pass 2 that represent the same source
+   */
+  private normalizeRawText(text: string): string {
+    return text
+      .replace(/\s+/g, ' ')           // Normalize whitespace
+      .replace(/\b(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(20)?(\d{2})\b/gi, '$1 $2 $4') // Normalize year format
+      .replace(/[^a-z0-9\s]/gi, '')   // Remove special characters
+      .toLowerCase()
+      .trim();
+  }
+
   private deduplicateHSBCTransactions(transactions: TransactionWithSource[]): Transaction[] {
     console.log(`\n========== SMART DEDUPLICATION ==========`);
     console.log(`Input: ${transactions.length} transactions`);
@@ -3118,24 +3131,32 @@ export class PDFParser {
       if (seen.has(key)) {
         const existing = seen.get(key)!;
 
+        // Normalize raw texts for comparison
+        const normalizedExistingText = existing._source?.rawText ? this.normalizeRawText(existing._source.rawText) : '';
+        const normalizedCurrentText = txn._source?.rawText ? this.normalizeRawText(txn._source.rawText) : '';
+
+        // Check if texts are similar (allow up to 20% difference for minor variations)
+        const similarity = this.calculateSimilarity(normalizedExistingText, normalizedCurrentText);
+        const textsAreSimilar = similarity > 0.8; // 80% similarity threshold
+
         // Compare source metadata to determine if this is a parser duplicate or real duplicate
         const sameLineIndex = existing._source?.lineIndex === txn._source?.lineIndex;
-        const sameRawText = existing._source?.rawText === txn._source?.rawText;
-        const samePass = existing._source?.passNumber === txn._source?.passNumber;
+        const similarRawText = textsAreSimilar && normalizedExistingText.length > 0 && normalizedCurrentText.length > 0;
 
-        // If from same source (line index OR raw text match), it's a parser duplicate
-        if ((sameLineIndex && txn._source?.lineIndex !== undefined) ||
-            (sameRawText && txn._source?.rawText)) {
+        // If from same source (line index OR similar raw text), it's a parser duplicate
+        if ((sameLineIndex && txn._source?.lineIndex !== undefined) || similarRawText) {
           console.log(`  🗑️  REMOVING parser duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
-          console.log(`      → Same source: lineIndex=${txn._source?.lineIndex}, rawText="${txn._source?.rawText?.substring(0, 30)}..."`);
+          console.log(`      → Same source: lineIndex=${txn._source?.lineIndex}, similarity=${(similarity * 100).toFixed(1)}%`);
+          console.log(`      → Existing text: "${existing._source?.rawText?.substring(0, 40)}..."`);
+          console.log(`      → Current text:  "${txn._source?.rawText?.substring(0, 40)}..."`);
           duplicatesRemoved.push(key);
           continue; // Skip this duplicate
         } else {
           // Different sources - this is a REAL duplicate from the PDF
           console.log(`  ✅ KEEPING real duplicate: ${txn.date} | ${txn.description} | £${txn.amount}`);
-          console.log(`      → Different sources:`);
-          console.log(`         Existing: lineIndex=${existing._source?.lineIndex}, pass=${existing._source?.passNumber}`);
-          console.log(`         Current:  lineIndex=${txn._source?.lineIndex}, pass=${txn._source?.passNumber}`);
+          console.log(`      → Different sources (similarity=${(similarity * 100).toFixed(1)}%):`);
+          console.log(`         Existing: pass=${existing._source?.passNumber}, text="${existing._source?.rawText?.substring(0, 30)}..."`);
+          console.log(`         Current:  pass=${txn._source?.passNumber}, text="${txn._source?.rawText?.substring(0, 30)}..."`);
           // Don't add to seen map - allow multiple real duplicates
         }
       }
@@ -3150,6 +3171,28 @@ export class PDFParser {
     console.log(`==========================================\n`);
 
     return cleanedTransactions;
+  }
+
+  /**
+   * Calculate similarity between two strings using simple character-based comparison
+   * Returns value between 0 (completely different) and 1 (identical)
+   */
+  private calculateSimilarity(str1: string, str2: string): number {
+    if (!str1 || !str2) return 0;
+    if (str1 === str2) return 1;
+
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+
+    if (longer.length === 0) return 1;
+
+    // Count matching characters
+    let matches = 0;
+    for (let i = 0; i < shorter.length; i++) {
+      if (shorter[i] === longer[i]) matches++;
+    }
+
+    return matches / longer.length;
   }
 
   private extractHSBCTransactions(text: string): Transaction[] {
