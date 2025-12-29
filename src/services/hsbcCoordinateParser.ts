@@ -16,20 +16,26 @@ export class HSBCCoordinateParser {
 
   async parseHSBCStatement(buffer: Buffer, parsedText: string, debug: boolean = false): Promise<Transaction[]> {
     console.log("\n========== HSBC COORDINATE PARSER ==========");
-    
+
     // Extract all text elements with coordinates
     const elements = await this.extractor.extractTextWithCoordinates(buffer);
     console.log(`Extracted ${elements.length} text elements from PDF`);
 
     // Detect column boundaries from headers
     const columns = this.detectHSBCColumns(elements);
-    
+    console.log('Column boundaries detected:');
+    console.log(`  Date: ${columns.date.min} - ${columns.date.max}`);
+    console.log(`  Description: ${columns.description.min} - ${columns.description.max}`);
+    console.log(`  Paid Out: ${columns.paidOut.min} - ${columns.paidOut.max}`);
+    console.log(`  Paid In: ${columns.paidIn.min} - ${columns.paidIn.max}`);
+    console.log(`  Balance: ${columns.balance.min} - ${columns.balance.max}`);
+
     // Extract transactions using coordinates
-    const transactions = this.extractTransactions(elements, columns, parsedText, debug);
-    
+    const transactions = this.extractTransactions(elements, columns, parsedText, true);
+
     console.log(`✓ Extracted ${transactions.length} HSBC transactions using coordinates`);
     console.log("============================================\n");
-    
+
     return transactions;
   }
 
@@ -103,28 +109,37 @@ export class HSBCCoordinateParser {
 
     // Group elements by Y position (same row)
     const rows = this.groupByRows(elements);
-    
+    console.log(`Grouped into ${rows.length} rows`);
+
     // Filter to transaction rows (skip headers, footers)
     const transactionRows = rows.filter(row => {
       const rowText = row.map(el => el.text).join(' ').toLowerCase();
-      
+
       // Skip header rows
       if (rowText.includes('date') && rowText.includes('payment')) return false;
       if (rowText.includes('paid out') && rowText.includes('paid in')) return false;
       if (rowText.includes('opening balance') && !rowText.includes('brought')) return false;
       if (rowText.includes('closing balance')) return false;
       if (rowText.includes('statement')) return false;
-      
+
       // Must have either a date or transaction type prefix
       return /\d{1,2}\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(rowText) ||
              /^(cr|bp|vis|dd|\)\)\))/.test(rowText.trim());
     });
 
+    console.log(`Found ${transactionRows.length} potential transaction rows`);
+
     // Process each transaction row
     for (const row of transactionRows) {
+      const rowText = row.map(el => el.text).join(' ');
+      console.log(`  Processing row: "${rowText.substring(0, 80)}..."`);
+
       const transaction = this.parseRow(row, columns);
       if (transaction) {
+        console.log(`    ✓ Extracted: ${transaction.date} | ${transaction.description} | £${transaction.amount}`);
         transactions.push(transaction);
+      } else {
+        console.log(`    ✗ Failed to parse row`);
       }
     }
 
