@@ -724,10 +724,12 @@ export class PDFParser {
 
           let description = restOfLine.substring(0, amountIndex).trim();
 
-          // Clean up description - remove "GBR" and extra spaces
+          // Clean up description - remove "GBR", newlines, and extra spaces
           description = description
             .replace(/\s*GBR\s*/gi, ' ')
-            .replace(/\s+/g, ' ')
+            .replace(/[\r\n]+/g, ' ')  // Replace newlines with spaces
+            .replace(/\s+/g, ' ')      // Replace multiple spaces with single space
+            .replace(/[",]/g, '')      // Remove commas and quotes that break CSV
             .trim();
 
           if (description && amount >= 0) {
