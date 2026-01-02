@@ -61,6 +61,7 @@ export class GenericCoordinateParser {
    */
   private detectColumns(elements: TextElement[]): {
     date?: { min: number; max: number };
+    reference?: { min: number; max: number };
     description?: { min: number; max: number };
     type?: { min: number; max: number };
     debit?: { min: number; max: number };
@@ -70,29 +71,101 @@ export class GenericCoordinateParser {
   } {
     const columns: Record<string, { min: number; max: number } | undefined> = {};
 
-    // Find column headers
+    // Find column headers - look for any text element that matches these patterns
     const headerPatterns = {
       date: /^date$/i,
-      description: /^(description|details|transaction|particulars)$/i,
+      reference: /^reference$/i,
+      description: /^(description|details|transaction|particulars|transaction details)$/i,
       type: /^(type|dr\/cr|d\/c)$/i,
-      debit: /^(debit|money\s*out|payments?|debits?|out\s*\()/i,
-      credit: /^(credit|money\s*in|receipts?|credits?|in\s*\()/i,
+      debit: /^(debit|out|money out|paid out)$/i,  // Match "Debit", "Out", "Money Out", etc.
+      credit: /^(credit|in|money in|paid in)$/i, // Match "Credit", "In", "Money In", etc.
       amount: /^(amount|value)$/i,
-      balance: /^balance$/i,
+      balance: /^balance/i,  // Match "Balance", "Balance (£)", etc.
     };
 
     // Find elements that match header patterns
+    const foundHeaders: Array<{ columnName: string; text: string; x: number; width: number }> = [];
+
     for (const [columnName, pattern] of Object.entries(headerPatterns)) {
       for (const el of elements) {
         if (pattern.test(el.text.trim())) {
-          // Found a header - use its X position to define column boundaries
-          columns[columnName] = {
-            min: el.x,
-            max: el.x + el.width,
-          };
+          // Store all potential headers
+          foundHeaders.push({
+            columnName,
+            text: el.text,
+            x: el.x,
+            width: el.width
+          });
+          console.log(`[Header Match] "${el.text}" matched ${columnName} pattern at x=${el.x.toFixed(1)}`);
+        }
+      }
+    }
+
+    // Filter out duplicate columns (e.g., "Money Out" and "Out" both match debit pattern)
+    // Strategy: Find headers that are in the same row (same Y coordinate, within tolerance)
+    // These are likely the actual table headers, not summary text
+
+    // Group headers by Y coordinate to find which ones are in the same row
+    const headersByY = new Map<number, Array<{ columnName: string; text: string; x: number; width: number; y: number }>>();
+
+    for (const header of foundHeaders) {
+      const headerEl = elements.find(el => el.text === header.text && el.x === header.x);
+      if (!headerEl) continue;
+
+      // Find or create Y group (within 5px tolerance)
+      let foundY = false;
+      for (const [y, group] of headersByY.entries()) {
+        if (Math.abs(y - headerEl.y) < 5) {
+          group.push({ ...header, y: headerEl.y });
+          foundY = true;
           break;
         }
       }
+      if (!foundY) {
+        headersByY.set(headerEl.y, [{ ...header, y: headerEl.y }]);
+      }
+    }
+
+    // IMPORTANT: Bank statements are ALWAYS organized by date chronologically
+    // Find the row with the most header columns that also appears ABOVE transaction dates
+    // This filters out summary sections that might have similar headers but appear after transactions start
+
+    let maxHeaders = 0;
+    let tableHeaderRow: Array<{ columnName: string; text: string; x: number; width: number; y: number }> = [];
+
+    console.log(`[Row Grouping] Found ${headersByY.size} header rows:`);
+    for (const [y, group] of headersByY.entries()) {
+      // Count unique column names (not total headers, since there may be duplicates)
+      const uniqueColumns = new Set(group.map(h => h.columnName)).size;
+      console.log(`  Row at y=${y.toFixed(1)}: ${group.length} headers (${uniqueColumns} unique) - ${group.map(h => `"${h.text}"`).join(', ')}`);
+      if (uniqueColumns > maxHeaders) {
+        maxHeaders = uniqueColumns;
+        tableHeaderRow = group;
+      }
+    }
+    console.log(`[Row Grouping] Selected row with ${maxHeaders} unique column types as table header row`);
+
+    // Use headers from the table header row, but deduplicate by column name
+    // For duplicate column names (e.g., both "Money In" and "In"), prefer the one with larger X
+    const columnMap = new Map<string, { text: string; x: number; width: number }>();
+    for (const header of tableHeaderRow) {
+      const existing = columnMap.get(header.columnName);
+      if (!existing || header.x > existing.x) {
+        // Prefer headers further to the right (table headers, not summary text on left)
+        columnMap.set(header.columnName, header);
+        if (existing) {
+          console.log(`  [Dedup] Replaced "${existing.text}" (x=${existing.x}) with "${header.text}" (x=${header.x}) for ${header.columnName}`);
+        }
+      }
+    }
+
+    // Set columns from filtered headers
+    for (const [columnName, header] of columnMap.entries()) {
+      columns[columnName] = {
+        min: header.x,
+        max: header.x + header.width,
+      };
+      console.log(`[Column Detection] Found "${columnName}" header: "${header.text}" at x=${header.x.toFixed(1)}, width=${header.width.toFixed(1)}`);
     }
 
     // Expand column boundaries to be more inclusive
@@ -121,9 +194,18 @@ export class GenericCoordinateParser {
     // Group elements by Y coordinate (rows)
     const rows = this.groupElementsByRow(elements);
 
-    // Date pattern to identify transaction rows
-    const datePattern = /^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/i;
+    // Multiple date patterns to identify transaction rows from different banks
+    const datePatterns = [
+      /^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/i,  // "01 Jan 2024" or "1 Jan"
+      /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/,  // "01/01/2024" or "01-01-24"
+      /^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/,    // "2024-01-01"
+      /^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}/i,  // "Jan 01"
+    ];
 
+    // Sort code pattern to avoid - match formats like "20-45-67"
+    const sortCodePattern = /^\d{2}-\d{2}-\d{2}$/;
+
+    let debugCount = 0;
     for (const row of rows) {
       // Extract date - combine all elements in the date column
       let date = "";
@@ -132,18 +214,68 @@ export class GenericCoordinateParser {
           (el) => el.x >= columns.date!.min && el.x <= columns.date!.max
         );
         date = dateElements.map((el) => el.text).join(" ").trim();
+
+        // Debug: Show date attempts from actual transaction pages
+        if (debug && date) {
+          const matchesAnyPattern = datePatterns.some(pattern => pattern.test(date));
+          // Only log if it looks like it might be a transaction (has date-like content)
+          if (matchesAnyPattern || /\d{1,2}/.test(date)) {
+            console.log(`[Date Check] Candidate: "${date.substring(0, 100)}", Pattern match: ${matchesAnyPattern}, Is sort code: ${sortCodePattern.test(date)}`);
+            debugCount++;
+            if (debugCount >= 50) {
+              console.log(`[Date Check] Stopping debug output after 50 candidates...`);
+              debug = false; // Stop flooding logs
+            }
+          }
+        }
       }
 
-      // Check if this row contains a valid date
-      if (!date || !datePattern.test(date)) continue; // Not a transaction row
+      // Check if this row contains a valid date (and not a sort code)
+      // Date must match at least one of the patterns
+      const matchesDatePattern = datePatterns.some(pattern => pattern.test(date));
+      if (!date || !matchesDatePattern || sortCodePattern.test(date)) continue; // Not a transaction row
 
-      // Extract description
-      let description = "";
-      if (columns.description) {
-        const descElements = row.elements.filter(
-          (el) => el.x >= columns.description!.min && el.x <= columns.description!.max
+      // Skip rows that contain multiple dates (summary pages with multi-column layout)
+      // Count how many date-like patterns appear in the date field
+      const dateMatches = date.match(/\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)/gi);
+      if (dateMatches && dateMatches.length > 1) {
+        if (debug) console.log(`[Skip] Row has multiple dates (${dateMatches.length}), likely a summary row: "${date.substring(0, 80)}"`);
+        continue; // This is a summary row with multiple transactions side-by-side
+      }
+
+      // Skip rows where the date field contains full sentences (mixed content from different PDF columns)
+      // Real transaction dates should be short: just date + maybe reference code
+      // If date text is very long or contains common sentence words, it's contaminated
+      const sentenceWords = /\b(the|and|you|your|will|may|with|from|have|this|that|are|for|not|but|can|all|should|must|been|has|was|were|statement|account|transaction|interest|balance|credit|debit)\b/i;
+      if (date.length > 100 || sentenceWords.test(date)) {
+        if (debug) console.log(`[Skip] Row has contaminated date field (likely mixed columns): "${date.substring(0, 80)}"`);
+        continue; // Date field contains text from other columns
+      }
+
+      // Extract reference code if present
+      let reference = "";
+      if (columns.reference) {
+        const refElements = row.elements.filter(
+          (el) => el.x >= columns.reference!.min && el.x <= columns.reference!.max
         );
-        description = descElements.map((el) => el.text).join(" ").trim();
+        reference = refElements.map((el) => el.text).join(" ").trim();
+      }
+
+      // Extract description from the area between reference/date and debit/credit columns
+      let description = "";
+      const descStart = columns.reference ? columns.reference.max : (columns.date ? columns.date.max : 0);
+      const descEnd = columns.debit ? columns.debit.min : (columns.credit ? columns.credit.min : 999999);
+
+      const descElements = row.elements.filter(
+        (el) => el.x > descStart && el.x < descEnd && !/^[\d,£$.]+$/.test(el.text.trim())
+      );
+      description = descElements.map((el) => el.text).join(" ").trim();
+
+      // If we have both reference and description, combine them
+      if (reference && description) {
+        description = `${reference} ${description}`;
+      } else if (reference && !description) {
+        description = reference;
       }
 
       // Check if this is an opening balance / balance brought forward
@@ -194,8 +326,9 @@ export class GenericCoordinateParser {
         }
       }
 
-      // STRATEGY 3: Statement has separate DEBIT/CREDIT columns (e.g., Riverside: OUT/IN)
-      if (!typeDetected && (columns.debit || columns.credit)) {
+      // STRATEGY 3: Statement has separate DEBIT/CREDIT columns (e.g., Riverside: OUT/IN, Crimson: Out/In)
+      // This works even if column headers weren't detected - we infer from X positions
+      if (!typeDetected) {
         const descEnd = columns.description ? columns.description.max : 0;
         const balanceStart = columns.balance ? columns.balance.min : 999999;
 
@@ -211,28 +344,39 @@ export class GenericCoordinateParser {
           const amountEl = amountCandidates[0];
           amount = this.parseAmount(amountEl.text);
 
-          // Check if in credit column boundaries
-          const isInCreditColumn = columns.credit &&
-            amountEl.x >= columns.credit.min &&
-            amountEl.x <= columns.credit.max;
+          // Check if in credit column boundaries (if detected)
+          if (columns.credit || columns.debit) {
+            const isInCreditColumn = columns.credit &&
+              amountEl.x >= columns.credit.min &&
+              amountEl.x <= columns.credit.max;
 
-          type = isInCreditColumn ? "credit" : "debit";
-          typeDetected = true;
-          if (debug) console.log(`[DEBUG] Strategy 3 (single amount): x=${amountEl.x}, isInCreditColumn=${isInCreditColumn}, type=${type}`);
-        } else if (amountCandidates.length >= 2) {
-          const firstAmount = this.parseAmount(amountCandidates[0].text);
-          const secondAmount = this.parseAmount(amountCandidates[1].text);
+            type = isInCreditColumn ? "credit" : "debit";
+            typeDetected = true;
+            if (debug) console.log(`[DEBUG] Strategy 3a (single amount with column): x=${amountEl.x}, isInCreditColumn=${isInCreditColumn}, type=${type}`);
+          } else {
+            // No column headers detected - we'll use Strategy 4 (balance comparison) instead
+            if (debug) console.log(`[DEBUG] Strategy 3b (single amount, no columns): x=${amountEl.x}, deferring to balance comparison`);
+          }
+        } else if (amountCandidates.length === 2) {
+          // Two amounts found - likely separate Out/In columns
+          // The leftmost is typically "Out" (debit), rightmost is "In" (credit)
+          const sortedCandidates = amountCandidates.sort((a, b) => a.x - b.x);
+          const leftAmount = this.parseAmount(sortedCandidates[0].text);
+          const rightAmount = this.parseAmount(sortedCandidates[1].text);
 
-          if (firstAmount > 0) {
-            amount = firstAmount;
+          if (leftAmount > 0 && rightAmount === 0) {
+            amount = leftAmount;
             type = "debit";
             typeDetected = true;
-            if (debug) console.log(`[DEBUG] Strategy 3 (two amounts): using first (debit)=${amount}`);
-          } else if (secondAmount > 0) {
-            amount = secondAmount;
+            if (debug) console.log(`[DEBUG] Strategy 3c (two amounts): left=${leftAmount} (debit), right=0`);
+          } else if (rightAmount > 0 && leftAmount === 0) {
+            amount = rightAmount;
             type = "credit";
             typeDetected = true;
-            if (debug) console.log(`[DEBUG] Strategy 3 (two amounts): using second (credit)=${amount}`);
+            if (debug) console.log(`[DEBUG] Strategy 3d (two amounts): left=0, right=${rightAmount} (credit)`);
+          } else if (leftAmount > 0 && rightAmount > 0) {
+            // Both have values - use balance comparison (Strategy 4) to determine which is correct
+            if (debug) console.log(`[DEBUG] Strategy 3e (two amounts both >0): deferring to balance comparison`);
           }
         }
       }
@@ -244,7 +388,31 @@ export class GenericCoordinateParser {
           (el) => el.x >= columns.balance!.min && el.x <= columns.balance!.max && this.isAmount(el.text)
         );
         if (balanceElement) {
-          balance = this.parseAmount(balanceElement.text);
+          // Use parseBalance to preserve negative sign
+          balance = this.parseBalance(balanceElement.text);
+        }
+      }
+
+      // STRATEGY 4: Determine debit/credit by comparing balance changes
+      // If type not yet detected and we have both balance and amount, calculate from balance change
+      if (!typeDetected && balance !== undefined && amount > 0 && transactions.length > 0) {
+        const previousTransaction = transactions[transactions.length - 1];
+        if (previousTransaction.balance !== undefined) {
+          const balanceChange = balance - previousTransaction.balance;
+
+          // If balance increased, it's a credit (money in)
+          // If balance decreased, it's a debit (money out)
+          if (Math.abs(balanceChange - amount) < 0.01) {
+            // Balance increased by the amount = credit
+            type = "credit";
+            typeDetected = true;
+            if (debug) console.log(`[DEBUG] Strategy 4 (balance comparison): balance increased by ${amount}, type=credit`);
+          } else if (Math.abs(balanceChange + amount) < 0.01) {
+            // Balance decreased by the amount = debit
+            type = "debit";
+            typeDetected = true;
+            if (debug) console.log(`[DEBUG] Strategy 4 (balance comparison): balance decreased by ${amount}, type=debit`);
+          }
         }
       }
 
@@ -272,7 +440,58 @@ export class GenericCoordinateParser {
       }
     }
 
+    // IMPORTANT: Sort transactions by date chronologically
+    // All bank statements are organized by date, so we enforce this
+    transactions.sort((a, b) => {
+      const dateA = this.parseTransactionDate(a.date);
+      const dateB = this.parseTransactionDate(b.date);
+      if (dateA && dateB) {
+        return dateA.getTime() - dateB.getTime();
+      }
+      return 0;
+    });
+
+    if (debug && transactions.length > 0) {
+      console.log(`[Sorted Transactions] First: ${transactions[0].date}, Last: ${transactions[transactions.length - 1].date}`);
+    }
+
     return transactions;
+  }
+
+  /**
+   * Parse transaction date string to Date object
+   */
+  private parseTransactionDate(dateStr: string): Date | null {
+    try {
+      // Handle various date formats
+      // DD/MM/YYYY or DD-MM-YYYY
+      const ddmmyyyyMatch = dateStr.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+      if (ddmmyyyyMatch) {
+        const day = parseInt(ddmmyyyyMatch[1]);
+        const month = parseInt(ddmmyyyyMatch[2]) - 1; // JS months are 0-indexed
+        const year = parseInt(ddmmyyyyMatch[3]);
+        const fullYear = year < 100 ? 2000 + year : year;
+        return new Date(fullYear, month, day);
+      }
+
+      // DD MMM YYYY (e.g., "01 Jan 2024")
+      const ddmmmyyyyMatch = dateStr.match(/^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})$/i);
+      if (ddmmmyyyyMatch) {
+        const day = parseInt(ddmmmyyyyMatch[1]);
+        const monthStr = ddmmmyyyyMatch[2];
+        const year = parseInt(ddmmmyyyyMatch[3]);
+        const monthMap: Record<string, number> = {
+          jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+          jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
+        };
+        const month = monthMap[monthStr.toLowerCase()];
+        return new Date(year, month, day);
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -320,11 +539,21 @@ export class GenericCoordinateParser {
   }
 
   /**
-   * Parse amount string to number
+   * Parse amount string to number (removes +/- signs)
    */
   private parseAmount(text: string): number {
     const cleaned = text.replace(/[£$€\s,]/g, "").replace(/^[+-]/, "");
     const amount = parseFloat(cleaned);
     return isNaN(amount) ? 0 : amount;
+  }
+
+  /**
+   * Parse balance string to number (preserves negative sign)
+   */
+  private parseBalance(text: string): number {
+    // Remove currency symbols and commas, but KEEP the minus sign
+    const cleaned = text.replace(/[£$€\s,]/g, "").replace(/^\+/, "");
+    const balance = parseFloat(cleaned);
+    return isNaN(balance) ? 0 : balance;
   }
 }

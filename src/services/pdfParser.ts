@@ -110,7 +110,7 @@ export class PDFParser {
       if ((transactions.length === 0 || !hasValidTransactions) && text.length > 100) {
         console.log("⚠️  Text-based parsing failed or produced invalid transactions - trying coordinate-based fallback");
         try {
-          const coordinateTransactions = await this.genericCoordinateParser.parseStatement(buffer, false);
+          const coordinateTransactions = await this.genericCoordinateParser.parseStatement(buffer, true); // Enable debug
           if (coordinateTransactions.length > 0) {
             transactions = coordinateTransactions;
             console.log(`✓ Coordinate-based fallback extracted ${transactions.length} transactions`);
@@ -207,6 +207,12 @@ export class PDFParser {
     if (text.includes("Monzo Bank Limited") || text.includes("monzo.com")) {
       console.log("Detected Monzo bank statement");
       return this.extractMonzoTransactions(text);
+    }
+
+    // Check if this is a Meridian Bank statement
+    if (text.includes("Meridian National Bank") || text.includes("Banking Without Boundaries")) {
+      console.log("Detected Meridian Bank statement");
+      return this.extractMeridianTransactions(text);
     }
 
     // Note: Metro Bank detection moved to parsePDF() method to use coordinate-based parser
@@ -746,6 +752,100 @@ export class PDFParser {
     return transactions;
   }
 
+  // Extract transactions from Meridian National Bank statements
+  private extractMeridianTransactions(text: string): Transaction[] {
+    const transactions: Transaction[] = [];
+    const lines = text.split("\n");
+
+    console.log("Parsing Meridian Bank statement...");
+
+    // Meridian format (from text extraction): Date Reference Description Debit/Credit Balance
+    // Example: "01 Jan 202492UJ71YQSCREWFIX DIRECT428.7121328.13"
+    // Example with negative balance: "01 May 2024 Z0E3780I APPLE.COM PURCHASE 788.57 -181.14"
+    // Pattern: DD MMM YYYY[reference 8 chars][Description][Amount][Balance]
+    // Reference is exactly 8 characters, balance can be negative
+    // Note: When balance is negative, there's a SPACE before the minus sign
+
+    const meridianPattern = /^(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})([A-Z0-9]{8})(.+?)(\d+\.\d{2})\s*(-?\d+\.\d{2})$/i;
+
+    let mayLineCount = 0;
+    let mayMatchCount = 0;
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) continue;
+
+      // Debug logging for May transactions to see why they're not matching
+      if (trimmedLine.includes('May 2024') && mayLineCount < 5) {
+        console.log(`[DEBUG May Line ${mayLineCount + 1}]: "${trimmedLine}"`);
+        mayLineCount++;
+      }
+
+      const match = trimmedLine.match(meridianPattern);
+
+      if (match) {
+        const date = match[1].trim();
+
+        // Track May matches
+        if (date.includes('May')) {
+          mayMatchCount++;
+          if (mayMatchCount <= 3) {
+            console.log(`[DEBUG May Match ${mayMatchCount}]: Successfully matched May transaction`);
+          }
+        }
+        const reference = match[2];
+        const descriptionRaw = match[3];
+        const amount1 = parseFloat(match[4]);
+        const amount2 = parseFloat(match[5]);
+
+        // The larger number is usually the balance, smaller is the transaction amount
+        // But we need to look at the description for debit/credit indicators
+        let amount: number;
+        let balance: number;
+        let type: 'debit' | 'credit';
+
+        // Try to extract description and determine which column the amounts are in
+        // Clean up description - remove digits that leaked in from amounts
+        let description = descriptionRaw.replace(/\d+\.\d{2}/g, '').trim();
+
+        // When balance is negative, amount2 will be negative
+        // We need to handle this case properly
+        // Use absolute values to determine which is the transaction amount
+        const absAmount1 = Math.abs(amount1);
+        const absAmount2 = Math.abs(amount2);
+
+        // The smaller absolute value is usually the transaction amount
+        if (absAmount1 < absAmount2) {
+          amount = amount1;
+          balance = amount2;
+          type = 'debit';
+        } else {
+          amount = absAmount2; // Use absolute value for amount
+          balance = amount2;   // Keep balance as-is (can be negative)
+          type = amount2 < 0 ? 'debit' : 'credit'; // If balance went negative, it's a debit
+        }
+
+        // Add reference to description
+        description = `${reference} ${description}`.trim();
+
+        if (date && description && amount > 0) {
+          transactions.push({
+            date,
+            description,
+            amount,
+            balance,
+            type,
+          });
+
+          console.log(`✓ Meridian: ${date} | ${description.substring(0, 30)} | ${type} £${amount} | Balance: £${balance}`);
+        }
+      }
+    }
+
+    console.log(`Extracted ${transactions.length} Meridian transactions`);
+    return transactions;
+  }
+
   // Extract transactions from NatWest bank statements
   private extractNatWestTransactions(text: string): Transaction[] {
     const transactions: Transaction[] = [];
@@ -1068,25 +1168,47 @@ export class PDFParser {
     // Track current date and pending multi-line descriptions
     let currentDate = '';
     let pendingDescription = ''; // Accumulate description parts
+    let inSummarySection = false; // Track if we've entered the summary/info section
 
     // Parse line by line
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
+
+      // Stop processing if we hit the summary section
+      if (!inSummarySection && (
+        line.includes('Summarybox') ||
+        line.includes('Summary box') ||
+        line.includes('Interest,RatesandFees') ||
+        line.includes('Interest, Rates and Fees') ||
+        line.includes('Pleasecheckyourstatement') ||
+        line.includes('Please check your statement')
+      )) {
+        console.log(`Stopping parse - hit summary section: ${line.substring(0, 50)}`);
+        inSummarySection = true;
+        break; // Stop parsing completely
+      }
 
       // Skip empty lines and headers/footers
       if (!line ||
           line.includes('Nationwide Building Society') ||
           line.includes('FlexDirect') ||
           line.includes('Statement no') ||
+          line.includes('Statementno') ||
           line.includes('Sort code') ||
+          line.includes('Sortcode') ||
           line.includes('Account no') ||
+          line.includes('Accountno') ||
           line.includes('Start balance') ||
+          line.includes('Startbalance') ||
           line.includes('End balance') ||
+          line.includes('Endbalance') ||
           line.includes('£ Out') ||
           line.includes('£ In') ||
           line.includes('£ Balance') ||
           line.includes('Average credit') ||
+          line.includes('Averagecredit') ||
           line.includes('Average debit') ||
+          line.includes('Averagedebit') ||
           line.includes('BIC') ||
           line.includes('IBAN') ||
           line.includes('Swift') ||
