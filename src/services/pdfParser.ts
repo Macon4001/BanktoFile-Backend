@@ -698,9 +698,10 @@ export class PDFParser {
 
         console.log(`Processing transaction line: "${date}${restOfLine.substring(0, 100)}..."`);
 
-        // Extract amounts - look for pattern like "-20.99" or "0.30" followed by balance
+        // Extract amounts - look for pattern like "-20.99" or "1,000.00" or "0.30" followed by balance
         // The pattern is: [amount][balance] at the end
-        const numberMatches = restOfLine.match(/[-+]?\d+\.\d{2}/g);
+        // Support thousand separators: 1,000.00
+        const numberMatches = restOfLine.match(/[-+]?\d{1,3}(?:,\d{3})*\.\d{2}/g);
 
         if (numberMatches && numberMatches.length >= 2) {
           console.log(`Found ${numberMatches.length} numbers:`, numberMatches);
@@ -709,8 +710,9 @@ export class PDFParser {
           const amountStr = numberMatches[numberMatches.length - 2];
           const balanceStr = numberMatches[numberMatches.length - 1];
 
-          const amount = Math.abs(parseFloat(amountStr));
-          const balance = parseFloat(balanceStr);
+          // Remove commas from thousand separators before parsing
+          const amount = Math.abs(parseFloat(amountStr.replace(/,/g, '')));
+          const balance = parseFloat(balanceStr.replace(/,/g, ''));
 
           // Determine if it's debit or credit based on the sign
           const isDebit = amountStr.startsWith('-');
