@@ -120,36 +120,52 @@ export async function checkPageLimitMiddleware(req: Request, res: Response, next
     // Get user ID from request (could be from session, cookie, or header)
     const userId = req.headers['x-user-id'] as string || req.query.userId as string;
 
+    console.log(`🔒 [PAGE_LIMIT] User ID from request: ${userId || 'none'}`);
+
+    let user;
+
     if (!userId) {
       // No user ID provided - create anonymous user with free tier
+      console.log(`🔒 [PAGE_LIMIT] No user ID found, creating anonymous user`);
       const email = `anonymous_${Date.now()}@temp.local`;
-      const user = await db.createUser(email);
+      user = await db.createUser(email);
       req.userId = user.id;
-      console.log(`Created anonymous user: ${user.id}`);
-      return next();
-    }
+      console.log(`🔒 [PAGE_LIMIT] Created anonymous user: ${user.id} with plan: ${user.plan}`);
+      // Don't return here! Continue to check page limits for anonymous users
+    } else {
+      req.userId = userId;
+      user = await db.getUserById(userId);
 
-    req.userId = userId;
-    const user = await db.getUserById(userId);
-
-    if (!user) {
-      return res.status(404).json({
-        error: 'User not found',
-        code: 'USER_NOT_FOUND',
-      });
+      if (!user) {
+        console.log(`🔒 [PAGE_LIMIT] ❌ User not found: ${userId}`);
+        return res.status(404).json({
+          error: 'User not found',
+          code: 'USER_NOT_FOUND',
+        });
+      }
+      console.log(`🔒 [PAGE_LIMIT] Found user: ${user.id} with plan: ${user.plan}`);
     }
 
     const pagesInFile = req.pagesInFile || 1;
     const maxPagesPerFile = getMaxPagesPerFile(user.plan as PlanType);
 
+    console.log(`🔒 [PAGE_LIMIT] Per-file limit check:`, {
+      userPlan: user.plan,
+      pagesInFile,
+      maxPagesPerFile,
+      willBlock: maxPagesPerFile !== -1 && pagesInFile > maxPagesPerFile,
+    });
+
     // Check per-file page limit first
     if (maxPagesPerFile !== -1 && pagesInFile > maxPagesPerFile) {
+      console.log(`🚫 [PAGE_LIMIT] BLOCKING FILE: ${pagesInFile} pages exceeds ${maxPagesPerFile} page limit for ${user.plan} plan`);
+
       // File exceeds per-file page limit for this tier
       // Suggest next tier
       const suggestedTier = getSuggestedTierForPages(pagesInFile);
       const suggestedPlan = suggestedTier ? getPlanDetails(suggestedTier) : null;
 
-      return res.status(403).json({
+      const response = {
         error: 'File page limit exceeded',
         code: 'FILE_PAGE_LIMIT_EXCEEDED',
         pagesInFile,
@@ -160,8 +176,14 @@ export async function checkPageLimitMiddleware(req: Request, res: Response, next
         suggestedPlanPrice: suggestedPlan?.price,
         suggestedMaxPages: suggestedPlan?.maxPagesPerFile,
         message: `This file has ${pagesInFile} pages. Your ${user.plan} plan supports files up to ${maxPagesPerFile} pages.`,
-      });
+      };
+
+      console.log(`🚫 [PAGE_LIMIT] Sending 403 response:`, response);
+      return res.status(403).json(response);
     }
+
+    console.log(`✅ [PAGE_LIMIT] File passed per-file page limit check`);
+
 
     // Check monthly usage limit
     const canConvert = await db.canConvert(userId, pagesInFile);
