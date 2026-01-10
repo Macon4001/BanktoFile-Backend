@@ -27,24 +27,33 @@ function getSuggestedTierForPages(pages: number): PlanType | null {
  */
 export async function countPagesMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
+    console.log('📊 [COUNT_PAGES] Starting page count middleware');
+
     if (!req.file) {
+      console.log('📊 [COUNT_PAGES] No file found, skipping');
       return next();
     }
+
+    console.log(`📊 [COUNT_PAGES] File details:`, {
+      name: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+    });
 
     // Count pages if it's a PDF
     if (req.file.mimetype === 'application/pdf') {
       const data = await pdf(req.file.buffer);
       req.pagesInFile = data.numpages;
-      console.log(`PDF has ${req.pagesInFile} pages`);
+      console.log(`📊 [COUNT_PAGES] ✅ PDF has ${req.pagesInFile} pages`);
     } else {
       // CSV files count as 1 page
       req.pagesInFile = 1;
-      console.log('CSV file counts as 1 page');
+      console.log('📊 [COUNT_PAGES] CSV file counts as 1 page');
     }
 
     next();
   } catch (error) {
-    console.error('Error counting pages:', error);
+    console.error('📊 [COUNT_PAGES] ❌ Error counting pages:', error);
     // If we can't count pages, assume 1 page to not block the user
     req.pagesInFile = 1;
     next();
@@ -56,34 +65,55 @@ export async function countPagesMiddleware(req: Request, res: Response, next: Ne
  */
 export async function checkPageLimitMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
+    console.log('🔒 [PAGE_LIMIT] Starting page limit check middleware');
+    console.log('🔒 [PAGE_LIMIT] Environment check:', {
+      DISABLE_LIMITS: process.env.DISABLE_LIMITS,
+      HAS_DATABASE_URL: !!process.env.DATABASE_URL,
+      NODE_ENV: process.env.NODE_ENV,
+    });
+
     // DEVELOPMENT MODE: Skip MONTHLY limits if explicitly disabled or DATABASE_URL is not set
     // BUT still enforce per-file page limits for testing
     const skipMonthlyLimits = process.env.DISABLE_LIMITS === 'true' || !process.env.DATABASE_URL;
 
+    console.log(`🔒 [PAGE_LIMIT] Skip monthly limits: ${skipMonthlyLimits}`);
+
     if (skipMonthlyLimits) {
-      console.log('⚠️  Monthly usage limits disabled (development mode)');
+      console.log('⚠️  [PAGE_LIMIT] Monthly usage limits disabled (development mode)');
       req.userId = 'dev-user';
 
       // Still check per-file page limits even in dev mode
       const pagesInFile = req.pagesInFile || 1;
       const freeTierLimit = 5; // Free tier max pages per file
 
+      console.log(`🔒 [PAGE_LIMIT] Checking per-file limit:`, {
+        pagesInFile,
+        freeTierLimit,
+        willBlock: pagesInFile > freeTierLimit,
+      });
+
       if (pagesInFile > freeTierLimit) {
-        console.log(`🚫 File has ${pagesInFile} pages, exceeds free tier limit of ${freeTierLimit}`);
-        return res.status(403).json({
+        console.log(`🚫 [PAGE_LIMIT] BLOCKING: File has ${pagesInFile} pages, exceeds free tier limit of ${freeTierLimit}`);
+
+        const suggestedTier = getSuggestedTierForPages(pagesInFile);
+        const response = {
           error: 'File page limit exceeded',
           code: 'FILE_PAGE_LIMIT_EXCEEDED',
           pagesInFile,
           maxPagesPerFile: freeTierLimit,
           currentPlan: 'free',
-          suggestedPlan: getSuggestedTierForPages(pagesInFile),
-          suggestedPlanName: getSuggestedTierForPages(pagesInFile) ? getPlanDetails(getSuggestedTierForPages(pagesInFile)!).name : undefined,
-          suggestedPlanPrice: getSuggestedTierForPages(pagesInFile) ? getPlanDetails(getSuggestedTierForPages(pagesInFile)!).price : undefined,
-          suggestedMaxPages: getSuggestedTierForPages(pagesInFile) ? getMaxPagesPerFile(getSuggestedTierForPages(pagesInFile)!) : undefined,
+          suggestedPlan: suggestedTier,
+          suggestedPlanName: suggestedTier ? getPlanDetails(suggestedTier).name : undefined,
+          suggestedPlanPrice: suggestedTier ? getPlanDetails(suggestedTier).price : undefined,
+          suggestedMaxPages: suggestedTier ? getMaxPagesPerFile(suggestedTier) : undefined,
           message: `This file has ${pagesInFile} pages. Free accounts can convert files up to ${freeTierLimit} pages.`,
-        });
+        };
+
+        console.log(`🚫 [PAGE_LIMIT] Sending 403 response:`, response);
+        return res.status(403).json(response);
       }
 
+      console.log(`✅ [PAGE_LIMIT] File passed per-file limit check (${pagesInFile}/${freeTierLimit} pages)`);
       return next();
     }
 
