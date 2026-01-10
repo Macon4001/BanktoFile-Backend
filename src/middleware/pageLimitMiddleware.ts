@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from '../db/postgres.js';
 import pdf from 'pdf-parse';
+import { getMaxPagesPerFile, getPlanDetails, PlanType } from '../config/stripe.js';
 
 // Extend Express Request to include user info
 declare module 'express-serve-static-core' {
@@ -8,6 +9,17 @@ declare module 'express-serve-static-core' {
     userId?: string;
     pagesInFile?: number;
   }
+}
+
+/**
+ * Helper function to suggest the next tier based on page count
+ */
+function getSuggestedTierForPages(pages: number): PlanType | null {
+  if (pages <= 5) return null; // Free tier is sufficient
+  if (pages <= 20) return 'basic';
+  if (pages <= 50) return 'starter';
+  if (pages <= 100) return 'professional';
+  return 'enterprise'; // Unlimited
 }
 
 /**
@@ -44,11 +56,34 @@ export async function countPagesMiddleware(req: Request, res: Response, next: Ne
  */
 export async function checkPageLimitMiddleware(req: Request, res: Response, next: NextFunction) {
   try {
-    // DEVELOPMENT MODE: Skip limits if explicitly disabled or DATABASE_URL is not set
-    if (process.env.DISABLE_LIMITS === 'true' || !process.env.DATABASE_URL) {
-      console.log('⚠️  Page limit checks disabled (development mode)');
+    // DEVELOPMENT MODE: Skip MONTHLY limits if explicitly disabled or DATABASE_URL is not set
+    // BUT still enforce per-file page limits for testing
+    const skipMonthlyLimits = process.env.DISABLE_LIMITS === 'true' || !process.env.DATABASE_URL;
+
+    if (skipMonthlyLimits) {
+      console.log('⚠️  Monthly usage limits disabled (development mode)');
       req.userId = 'dev-user';
-      req.pagesInFile = req.pagesInFile || 1;
+
+      // Still check per-file page limits even in dev mode
+      const pagesInFile = req.pagesInFile || 1;
+      const freeTierLimit = 5; // Free tier max pages per file
+
+      if (pagesInFile > freeTierLimit) {
+        console.log(`🚫 File has ${pagesInFile} pages, exceeds free tier limit of ${freeTierLimit}`);
+        return res.status(403).json({
+          error: 'File page limit exceeded',
+          code: 'FILE_PAGE_LIMIT_EXCEEDED',
+          pagesInFile,
+          maxPagesPerFile: freeTierLimit,
+          currentPlan: 'free',
+          suggestedPlan: getSuggestedTierForPages(pagesInFile),
+          suggestedPlanName: getSuggestedTierForPages(pagesInFile) ? getPlanDetails(getSuggestedTierForPages(pagesInFile)!).name : undefined,
+          suggestedPlanPrice: getSuggestedTierForPages(pagesInFile) ? getPlanDetails(getSuggestedTierForPages(pagesInFile)!).price : undefined,
+          suggestedMaxPages: getSuggestedTierForPages(pagesInFile) ? getMaxPagesPerFile(getSuggestedTierForPages(pagesInFile)!) : undefined,
+          message: `This file has ${pagesInFile} pages. Free accounts can convert files up to ${freeTierLimit} pages.`,
+        });
+      }
+
       return next();
     }
 
@@ -74,8 +109,32 @@ export async function checkPageLimitMiddleware(req: Request, res: Response, next
       });
     }
 
-    const pagesNeeded = req.pagesInFile || 1;
-    const canConvert = await db.canConvert(userId, pagesNeeded);
+    const pagesInFile = req.pagesInFile || 1;
+    const maxPagesPerFile = getMaxPagesPerFile(user.plan as PlanType);
+
+    // Check per-file page limit first
+    if (maxPagesPerFile !== -1 && pagesInFile > maxPagesPerFile) {
+      // File exceeds per-file page limit for this tier
+      // Suggest next tier
+      const suggestedTier = getSuggestedTierForPages(pagesInFile);
+      const suggestedPlan = suggestedTier ? getPlanDetails(suggestedTier) : null;
+
+      return res.status(403).json({
+        error: 'File page limit exceeded',
+        code: 'FILE_PAGE_LIMIT_EXCEEDED',
+        pagesInFile,
+        maxPagesPerFile,
+        currentPlan: user.plan,
+        suggestedPlan: suggestedTier,
+        suggestedPlanName: suggestedPlan?.name,
+        suggestedPlanPrice: suggestedPlan?.price,
+        suggestedMaxPages: suggestedPlan?.maxPagesPerFile,
+        message: `This file has ${pagesInFile} pages. Your ${user.plan} plan supports files up to ${maxPagesPerFile} pages.`,
+      });
+    }
+
+    // Check monthly usage limit
+    const canConvert = await db.canConvert(userId, pagesInFile);
 
     if (!canConvert) {
       const pagesRemaining = Math.max(0, user.pagesLimit! - user.pagesUsed!);
@@ -99,14 +158,14 @@ export async function checkPageLimitMiddleware(req: Request, res: Response, next
       }
 
       return res.status(403).json({
-        error: 'Page limit exceeded',
-        code: 'PAGE_LIMIT_EXCEEDED',
+        error: 'Monthly page limit exceeded',
+        code: 'MONTHLY_PAGE_LIMIT_EXCEEDED',
         pagesUsed: user.pagesUsed,
         pagesLimit: user.pagesLimit,
         pagesRemaining,
-        pagesNeeded,
+        pagesNeeded: pagesInFile,
         plan: user.plan,
-        message: `You've used ${user.pagesUsed} of your ${user.pagesLimit} monthly pages. This file requires ${pagesNeeded} page(s). Please upgrade your plan to continue.`,
+        message: `You've used ${user.pagesUsed} of your ${user.pagesLimit} monthly pages. This file requires ${pagesInFile} page(s). Please upgrade your plan to continue.`,
       });
     }
 

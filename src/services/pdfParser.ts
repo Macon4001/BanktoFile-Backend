@@ -3,6 +3,7 @@ import { Transaction, ParsedStatement } from "../types/index.js";
 import { MetroBankCoordinateParser } from "./metroBankCoordinateParser.js";
 import { GenericCoordinateParser } from "./genericCoordinateParser.js";
 import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
+import { bankDetectionService, BankDetectionResult } from "./bankDetectionService.js";
 
 /**
  * Internal metadata to track where a transaction was parsed from
@@ -33,7 +34,7 @@ export class PDFParser {
     this.genericCoordinateParser = new GenericCoordinateParser();
     this.hsbcParser = new HSBCCoordinateParser();
   }
-  async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean }> {
+  async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean; bankDetection?: BankDetectionResult }> {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data = await (pdfParse as any).default(buffer);
@@ -42,6 +43,12 @@ export class PDFParser {
       console.log("PDF Text extracted (first 1000 chars):", text.substring(0, 1000)); // Debug log
       console.log("PDF Text length:", text.length); // Debug log
       console.log("PDF Number of pages:", data.numpages); // Debug log
+
+      // Detect non-UK bank (quick scan of first 2000 chars)
+      const bankDetection = bankDetectionService.detectNonUKBank(text, true);
+      if (bankDetection.isNonUK) {
+        console.log(`⚠️  Non-UK bank detected (confidence: ${bankDetection.confidence}):`, bankDetection.indicators);
+      }
 
       // Check if the PDF is likely image-based (scanned)
       const isScanned = this.isLikelyScannedPDF(text, data.numpages);
@@ -53,6 +60,7 @@ export class PDFParser {
           metadata: {},
           rawText: text,
           needsOCR: true,
+          bankDetection,
         };
       }
 
@@ -65,6 +73,7 @@ export class PDFParser {
           transactions,
           metadata: this.extractMetadata(text),
           rawText: text,
+          bankDetection,
         };
       }
 
@@ -77,6 +86,7 @@ export class PDFParser {
           transactions,
           metadata: this.extractMetadata(text),
           rawText: text,
+          bankDetection,
         };
       }
 
@@ -131,6 +141,7 @@ export class PDFParser {
         metadata: this.extractMetadata(text),
         rawText: text,
         needsOCR,
+        bankDetection,
       };
     } catch (error) {
       console.error("Error parsing PDF:", error);

@@ -18,7 +18,7 @@ CREATE TABLE users (
     subscription_status VARCHAR(50) CHECK (subscription_status IN ('active', 'canceled', 'past_due', 'trialing', 'incomplete', 'incomplete_expired', 'unpaid')),
 
     -- Plan and usage tracking
-    plan VARCHAR(50) NOT NULL DEFAULT 'free' CHECK (plan IN ('free', 'starter', 'professional', 'enterprise')),
+    plan VARCHAR(50) NOT NULL DEFAULT 'free' CHECK (plan IN ('free', 'basic', 'starter', 'professional', 'enterprise')),
     pages_used_today INTEGER NOT NULL DEFAULT 0,
     daily_pages_limit INTEGER NOT NULL DEFAULT 3, -- Daily limit for free plan
     last_reset_date DATE DEFAULT CURRENT_DATE, -- Track when daily usage was last reset

@@ -16,7 +16,7 @@ router.post('/create-checkout-session', async (req: Request, res: Response) => {
     }
 
     // Validate plan
-    if (!['starter', 'professional', 'enterprise'].includes(plan)) {
+    if (!['basic', 'starter', 'professional', 'enterprise'].includes(plan)) {
       return res.status(400).json({ error: 'Invalid plan selected' });
     }
 

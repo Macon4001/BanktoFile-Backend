@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { stripe, getPagesLimit, PlanType } from '../config/stripe.js';
+import { stripe, getFilesLimit, PlanType } from '../config/stripe.js';
 import { db } from '../db/postgres.js';
 import Stripe from 'stripe';
 
@@ -93,12 +93,12 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
     stripe_customer_id: session.customer as string,
     subscription_id: session.subscription as string,
     plan: plan,
-    monthly_pages_limit: getPagesLimit(plan),
+    monthly_pages_limit: getFilesLimit(plan),
     pages_used_monthly: 0, // Reset usage on new purchase
     subscription_status: 'active',
   });
 
-  console.log(`Checkout completed for user ${userId}, plan: ${plan}, limit: ${getPagesLimit(plan)} pages`);
+  console.log(`Checkout completed for user ${userId}, plan: ${plan}, limit: ${getFilesLimit(plan)} files`);
 }
 
 // Handle subscription updates
@@ -125,7 +125,7 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
     current_period_end: new Date((subscription as any).current_period_end * 1000),
     ...(plan && {
       plan: plan,
-      monthly_pages_limit: getPagesLimit(plan),
+      monthly_pages_limit: getFilesLimit(plan),
     }),
   });
 
@@ -164,7 +164,7 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
     // Period has ended, downgrade to free plan
     await db.updateUser(userId, {
       plan: 'free',
-      monthly_pages_limit: getPagesLimit('free'),
+      monthly_pages_limit: getFilesLimit('free'),
       pages_used_monthly: 0,
       subscription_status: 'canceled',
       subscription_id: undefined,

@@ -33,7 +33,12 @@ export class UploadController {
       }
 
       const file = req.file;
-      let parsedData: ParsedStatement & { rawText?: string; usedOCR?: boolean; confidence?: number };
+      let parsedData: ParsedStatement & {
+        rawText?: string;
+        usedOCR?: boolean;
+        confidence?: number;
+        bankDetection?: { isNonUK: boolean; indicators: string[]; confidence: 'low' | 'medium' | 'high' };
+      };
       let rawContent = "";
 
       // Determine file type and parse accordingly
@@ -115,6 +120,7 @@ export class UploadController {
           format: 'xlsx',
           usedOCR: parsedData.usedOCR || false,
           ocrConfidence: parsedData.confidence,
+          bankDetection: parsedData.bankDetection,
         });
       } else {
         // CSV only
@@ -128,6 +134,7 @@ export class UploadController {
           format: 'csv',
           usedOCR: parsedData.usedOCR || false,
           ocrConfidence: parsedData.confidence,
+          bankDetection: parsedData.bankDetection,
         });
       }
     } catch (error) {

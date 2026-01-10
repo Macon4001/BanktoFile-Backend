@@ -19,7 +19,7 @@ export function getStripe(): Stripe {
 // For backwards compatibility
 export const stripe = new Proxy({} as Stripe, {
   get(target, prop) {
-    return (getStripe() as any)[prop];
+    return (getStripe() as Record<string, unknown>)[prop];
   }
 });
 
@@ -28,67 +28,80 @@ export function getPricingTiers() {
   return {
     free: {
       name: 'Free',
-      pages: 50,
+      filesPerMonth: 90, // 3 per day * 30 days
+      filesPerDay: 3,
+      maxPagesPerFile: 5,
       price: 0,
       priceId: null, // No Stripe price ID for free tier
       features: [
-        '50 pages per month',
-        'PDF to CSV conversion',
-        'PDF to XLSX conversion',
+        '3 files per day',
+        'Up to 5 pages per file',
+        'CSV & XLSX formats',
         'Basic support',
-        'No credit card required',
+        'Secure processing',
+      ],
+    },
+    basic: {
+      name: 'Basic',
+      filesPerMonth: 150,
+      maxPagesPerFile: 20,
+      price: 20,
+      priceId: process.env.STRIPE_BASIC_PRICE_ID || 'price_basic',
+      features: [
+        '150 files per month',
+        'Up to 20 pages per file',
+        'CSV & XLSX formats',
+        'Email support',
+        'Secure processing',
       ],
     },
     starter: {
       name: 'Starter',
-      pages: 400,
-      price: 30,
+      filesPerMonth: 400,
+      maxPagesPerFile: 50,
+      price: 40,
       priceId: process.env.STRIPE_STARTER_PRICE_ID || 'price_starter',
       features: [
-        '400 pages per month',
-        'PDF to CSV conversion',
-        'PDF to XLSX conversion',
-        'Priority email support',
-        'Bulk conversion',
-        'No watermarks',
+        '400 files per month',
+        'Up to 50 pages per file',
+        'CSV & XLSX formats',
+        'Email support',
+        'Secure processing',
       ],
     },
     professional: {
-      name: 'Professional',
-      pages: 1000,
+      name: 'Pro',
+      filesPerMonth: 1000,
+      maxPagesPerFile: 100,
       price: 60,
       priceId: process.env.STRIPE_PROFESSIONAL_PRICE_ID || 'price_professional',
       features: [
-        '1,000 pages per month',
-        'PDF to CSV conversion',
-        'PDF to XLSX conversion',
-        'Priority support',
-        'Bulk conversion',
-        'API access',
-        'Custom formatting',
-        'Advanced analytics',
+        '1,000 files per month',
+        'Up to 100 pages per file',
+        'CSV & XLSX formats',
+        'Priority email support',
+        'Secure processing',
       ],
     },
     enterprise: {
       name: 'Enterprise',
-      pages: 4000,
+      filesPerMonth: 4000,
+      maxPagesPerFile: -1, // -1 means unlimited
       price: 99,
       priceId: process.env.STRIPE_ENTERPRISE_PRICE_ID || 'price_enterprise',
       features: [
-        '4,000 pages per month',
-        'Everything in Professional',
-        'Dedicated support',
-        'Custom integrations',
-        'SLA guarantee',
-        'Team collaboration',
-        'White-label options',
-        'Unlimited file size',
+        '4,000 files per month',
+        'Unlimited pages per file',
+        'CSV & XLSX formats',
+        'Priority email support',
+        'Secure processing',
+        'Bulk processing',
       ],
     },
   } as const;
 }
 
-export type PlanType = 'free' | 'starter' | 'professional' | 'enterprise';
+export type PlanType = 'free' | 'basic' | 'starter' | 'professional' | 'enterprise';
 
 // Export as getter to ensure it reads env vars at runtime
 export const PRICING_TIERS = new Proxy({} as ReturnType<typeof getPricingTiers>, {
@@ -102,7 +115,12 @@ export function getPlanDetails(plan: PlanType) {
   return getPricingTiers()[plan];
 }
 
-// Helper function to get pages limit for a plan
-export function getPagesLimit(plan: PlanType): number {
-  return getPricingTiers()[plan].pages;
+// Helper function to get files limit for a plan (monthly)
+export function getFilesLimit(plan: PlanType): number {
+  return getPricingTiers()[plan].filesPerMonth;
+}
+
+// Helper function to get max pages per file for a plan
+export function getMaxPagesPerFile(plan: PlanType): number {
+  return getPricingTiers()[plan].maxPagesPerFile;
 }

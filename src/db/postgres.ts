@@ -9,7 +9,7 @@ export interface User {
   stripe_customer_id?: string;
   subscription_id?: string;
   subscription_status?: 'active' | 'canceled' | 'past_due' | 'trialing' | 'incomplete' | 'incomplete_expired' | 'unpaid';
-  plan: 'free' | 'starter' | 'professional' | 'enterprise';
+  plan: 'free' | 'basic' | 'starter' | 'professional' | 'enterprise';
   pages_used_today: number;
   daily_pages_limit: number;
   last_reset_date: string;
