@@ -15,6 +15,8 @@ export interface User {
   last_reset_date: string;
   pages_used_monthly: number;
   monthly_pages_limit: number;
+  files_used_monthly: number;
+  monthly_files_limit: number;
   current_period_start?: Date;
   current_period_end?: Date;
   google_id?: string;
@@ -29,6 +31,8 @@ export interface User {
   dailyPagesLimit?: number;
   pagesUsedMonthly?: number;
   monthlyPagesLimit?: number;
+  filesUsedMonthly?: number;
+  monthlyFilesLimit?: number;
 }
 
 export interface ConversionLog {
@@ -149,12 +153,15 @@ function normalizeUser(dbUser: User): User {
   return {
     ...dbUser,
     // Map snake_case DB fields to camelCase for backwards compatibility
-    pagesUsed: dbUser.plan === 'free' ? dbUser.pages_used_today : dbUser.pages_used_monthly,
-    pagesLimit: dbUser.plan === 'free' ? dbUser.daily_pages_limit : dbUser.monthly_pages_limit,
+    // For paid users, show FILES used/limit. For free users, show pages (daily limit)
+    pagesUsed: dbUser.plan === 'free' ? dbUser.pages_used_today : dbUser.files_used_monthly,
+    pagesLimit: dbUser.plan === 'free' ? dbUser.daily_pages_limit : dbUser.monthly_files_limit,
     pagesUsedToday: dbUser.pages_used_today,
     dailyPagesLimit: dbUser.daily_pages_limit,
     pagesUsedMonthly: dbUser.pages_used_monthly,
     monthlyPagesLimit: dbUser.monthly_pages_limit,
+    filesUsedMonthly: dbUser.files_used_monthly,
+    monthlyFilesLimit: dbUser.monthly_files_limit,
   };
 }
 
@@ -183,9 +190,11 @@ export class PostgresStore {
           pages_used_today,
           daily_pages_limit,
           pages_used_monthly,
-          monthly_pages_limit
+          monthly_pages_limit,
+          files_used_monthly,
+          monthly_files_limit
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *`,
         [
           email,
@@ -195,8 +204,10 @@ export class PostgresStore {
           additionalFields.plan || 'free',
           0, // pages_used_today
           3, // daily_pages_limit for free users
-          0, // pages_used_monthly
-          50, // monthly_pages_limit
+          0, // pages_used_monthly (deprecated, kept for compatibility)
+          50, // monthly_pages_limit (deprecated, kept for compatibility)
+          0, // files_used_monthly
+          90, // monthly_files_limit (3 files/day * 30 days for free users)
         ]
       );
       return normalizeUser(result.rows[0]);
@@ -293,6 +304,8 @@ export class PostgresStore {
         daily_pages_limit: 'daily_pages_limit',
         pages_used_monthly: 'pages_used_monthly',
         monthly_pages_limit: 'monthly_pages_limit',
+        files_used_monthly: 'files_used_monthly',
+        monthly_files_limit: 'monthly_files_limit',
         current_period_start: 'current_period_start',
         current_period_end: 'current_period_end',
         google_id: 'google_id',
@@ -356,14 +369,16 @@ export class PostgresStore {
       if (user.rows[0]) {
         const { plan } = user.rows[0];
         if (plan === 'free') {
+          // Free users: increment pages used today (daily limit based on pages)
           await client.query(
             'UPDATE users SET pages_used_today = pages_used_today + $1 WHERE id = $2',
             [pagesConverted, userId]
           );
         } else {
+          // Paid users: increment FILES used (monthly limit based on number of files, not pages)
           await client.query(
-            'UPDATE users SET pages_used_monthly = pages_used_monthly + $1 WHERE id = $2',
-            [pagesConverted, userId]
+            'UPDATE users SET files_used_monthly = files_used_monthly + 1 WHERE id = $2',
+            [userId]
           );
         }
       }
@@ -404,7 +419,7 @@ export class PostgresStore {
       );
 
       const result = await client.query<User>(
-        'SELECT plan, pages_used_today, daily_pages_limit, pages_used_monthly, monthly_pages_limit, subscription_status, current_period_end FROM users WHERE id = $1',
+        'SELECT plan, pages_used_today, daily_pages_limit, files_used_monthly, monthly_files_limit, subscription_status, current_period_end FROM users WHERE id = $1',
         [userId]
       );
 
@@ -437,11 +452,13 @@ export class PostgresStore {
         }
       }
 
-      // Check page limits
+      // Check limits
       if (user.plan === 'free') {
+        // Free users: check daily page limit
         return (user.pages_used_today + pagesNeeded) <= user.daily_pages_limit;
       } else {
-        return (user.pages_used_monthly + pagesNeeded) <= user.monthly_pages_limit;
+        // Paid users: check monthly FILE limit (can they upload 1 more file?)
+        return (user.files_used_monthly + 1) <= user.monthly_files_limit;
       }
     } finally {
       client.release();
@@ -458,7 +475,7 @@ export class PostgresStore {
       );
 
       if (user.rows[0]) {
-        const { plan } = user.rows[0];
+        const { plan} = user.rows[0];
         if (plan === 'free') {
           await client.query(
             'UPDATE users SET pages_used_today = 0, last_reset_date = CURRENT_DATE WHERE id = $1',
@@ -466,7 +483,7 @@ export class PostgresStore {
           );
         } else {
           await client.query(
-            'UPDATE users SET pages_used_monthly = 0 WHERE id = $1',
+            'UPDATE users SET files_used_monthly = 0 WHERE id = $1',
             [userId]
           );
         }

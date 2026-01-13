@@ -126,8 +126,8 @@ async function handleCheckoutComplete(session: any) {
     stripe_customer_id: session.customer as string,
     subscription_id: session.subscription as string,
     plan: plan,
-    monthly_pages_limit: getFilesLimit(plan),
-    pages_used_monthly: 0, // Reset usage on new purchase
+    monthly_files_limit: getFilesLimit(plan), // Set FILES limit, not pages
+    files_used_monthly: 0, // Reset file usage on new purchase
     subscription_status: 'active',
     ...(periodStart && { current_period_start: periodStart }),
     ...(periodEnd && { current_period_end: periodEnd }),
@@ -162,7 +162,7 @@ async function handleSubscriptionUpdate(subscription: any) {
     current_period_end: new Date(subWithPeriod.current_period_end * 1000),
     ...(plan && {
       plan: plan,
-      monthly_pages_limit: getFilesLimit(plan),
+      monthly_files_limit: getFilesLimit(plan),
     }),
   });
 
@@ -203,8 +203,8 @@ async function handleSubscriptionDeleted(subscription: any) {
     // Period has ended, downgrade to free plan
     await db.updateUser(userId, {
       plan: 'free',
-      monthly_pages_limit: getFilesLimit('free'),
-      pages_used_monthly: 0,
+      monthly_files_limit: getFilesLimit('free'),
+      files_used_monthly: 0,
       subscription_status: 'canceled',
       subscription_id: undefined,
     });
