@@ -150,6 +150,11 @@ pool.on('error', (err) => {
 
 // Helper function to normalize user object for backwards compatibility
 function normalizeUser(dbUser: User): User {
+  // Debug logging to track file vs page counts
+  if (dbUser.plan !== 'free') {
+    console.log(`[normalizeUser] User ${dbUser.email} (${dbUser.plan}): files_used_monthly=${dbUser.files_used_monthly}, monthly_files_limit=${dbUser.monthly_files_limit}, pages_used_monthly=${dbUser.pages_used_monthly}`);
+  }
+
   return {
     ...dbUser,
     // Map snake_case DB fields to camelCase for backwards compatibility
