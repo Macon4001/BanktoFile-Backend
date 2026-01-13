@@ -1,9 +1,20 @@
 import { Router, Request, Response } from 'express';
 import { stripe, getFilesLimit, PlanType } from '../config/stripe.js';
 import { db } from '../db/postgres.js';
-import Stripe from 'stripe';
+import type * as Stripe from 'stripe';
 
 const router = Router();
+
+// Type helper for Stripe subscription with period dates
+interface StripeSubscriptionWithPeriod extends Stripe.Subscription {
+  current_period_start: number;
+  current_period_end: number;
+}
+
+// Type helper for Stripe invoice with subscription
+interface StripeInvoiceWithSubscription extends Stripe.Invoice {
+  subscription: string | Stripe.Subscription;
+}
 
 // Webhook endpoint - must use raw body
 router.post('/stripe', async (req: Request, res: Response) => {
@@ -88,6 +99,22 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
     return;
   }
 
+  // Fetch the subscription to get period dates
+  let periodStart: Date | undefined;
+  let periodEnd: Date | undefined;
+
+  if (session.subscription) {
+    try {
+      const subscription = await stripe.subscriptions.retrieve(session.subscription as string) as unknown as StripeSubscriptionWithPeriod;
+      periodStart = new Date(subscription.current_period_start * 1000);
+      periodEnd = new Date(subscription.current_period_end * 1000);
+      console.log(`Retrieved subscription periods: ${periodStart.toISOString()} to ${periodEnd.toISOString()}`);
+    } catch (error) {
+      console.error('Error fetching subscription from checkout session:', error);
+      // Continue anyway - subscription.created webhook will set these later
+    }
+  }
+
   // Update user with customer ID and reset usage
   await db.updateUser(userId, {
     stripe_customer_id: session.customer as string,
@@ -96,9 +123,11 @@ async function handleCheckoutComplete(session: Stripe.Checkout.Session) {
     monthly_pages_limit: getFilesLimit(plan),
     pages_used_monthly: 0, // Reset usage on new purchase
     subscription_status: 'active',
+    ...(periodStart && { current_period_start: periodStart }),
+    ...(periodEnd && { current_period_end: periodEnd }),
   });
 
-  console.log(`Checkout completed for user ${userId}, plan: ${plan}, limit: ${getFilesLimit(plan)} files`);
+  console.log(`Checkout completed for user ${userId}, plan: ${plan}, limit: ${getFilesLimit(plan)} files, period: ${periodStart?.toISOString()} to ${periodEnd?.toISOString()}`);
 }
 
 // Handle subscription updates
@@ -117,12 +146,13 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
   }
 
   const plan = subscription.metadata?.plan as PlanType;
+  const subWithPeriod = subscription as unknown as StripeSubscriptionWithPeriod;
 
   await db.updateUser(userId, {
     subscription_id: subscription.id,
-    subscription_status: subscription.status as any,
-    current_period_start: new Date((subscription as any).current_period_start * 1000),
-    current_period_end: new Date((subscription as any).current_period_end * 1000),
+    subscription_status: subscription.status as 'active' | 'canceled' | 'past_due' | 'trialing' | 'incomplete' | 'incomplete_expired' | 'unpaid',
+    current_period_start: new Date(subWithPeriod.current_period_start * 1000),
+    current_period_end: new Date(subWithPeriod.current_period_end * 1000),
     ...(plan && {
       plan: plan,
       monthly_pages_limit: getFilesLimit(plan),
@@ -149,7 +179,8 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 
   // Check if subscription is canceled_at_period_end (user keeps access until period ends)
   // vs immediately canceled (cancel_at_period_end = false)
-  const periodEnd = new Date((subscription as any).current_period_end * 1000);
+  const subWithPeriod = subscription as unknown as StripeSubscriptionWithPeriod;
+  const periodEnd = new Date(subWithPeriod.current_period_end * 1000);
   const now = new Date();
 
   // Only downgrade if we're past the period end
@@ -175,7 +206,10 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 
 // Handle successful payment (subscription renewal)
 async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
-  const subscriptionId = (invoice as any).subscription as string;
+  const invoiceWithSub = invoice as unknown as StripeInvoiceWithSubscription;
+  const subscriptionId = typeof invoiceWithSub.subscription === 'string'
+    ? invoiceWithSub.subscription
+    : invoiceWithSub.subscription?.id;
 
   if (!subscriptionId) {
     return;
@@ -194,7 +228,10 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
 
 // Handle failed payment
 async function handlePaymentFailed(invoice: Stripe.Invoice) {
-  const subscriptionId = (invoice as any).subscription as string;
+  const invoiceWithSub = invoice as unknown as StripeInvoiceWithSubscription;
+  const subscriptionId = typeof invoiceWithSub.subscription === 'string'
+    ? invoiceWithSub.subscription
+    : invoiceWithSub.subscription?.id;
 
   if (!subscriptionId) {
     return;
