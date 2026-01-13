@@ -155,7 +155,7 @@ function normalizeUser(dbUser: User): User {
     console.log(`[normalizeUser] User ${dbUser.email} (${dbUser.plan}): files_used_monthly=${dbUser.files_used_monthly}, monthly_files_limit=${dbUser.monthly_files_limit}, pages_used_monthly=${dbUser.pages_used_monthly}`);
   }
 
-  return {
+  const normalized = {
     ...dbUser,
     // Map snake_case DB fields to camelCase for backwards compatibility
     // For paid users, show FILES used/limit. For free users, show pages (daily limit)
@@ -168,6 +168,9 @@ function normalizeUser(dbUser: User): User {
     filesUsedMonthly: dbUser.files_used_monthly,
     monthlyFilesLimit: dbUser.monthly_files_limit,
   };
+
+  console.log(`[normalizeUser] Computed pagesUsed=${normalized.pagesUsed}, pagesLimit=${normalized.pagesLimit}`);
+  return normalized;
 }
 
 export class PostgresStore {
@@ -382,7 +385,7 @@ export class PostgresStore {
         } else {
           // Paid users: increment FILES used (monthly limit based on number of files, not pages)
           await client.query(
-            'UPDATE users SET files_used_monthly = files_used_monthly + 1 WHERE id = $2',
+            'UPDATE users SET files_used_monthly = files_used_monthly + 1 WHERE id = $1',
             [userId]
           );
         }
