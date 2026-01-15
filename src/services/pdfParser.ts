@@ -35,10 +35,45 @@ export class PDFParser {
     this.hsbcParser = new HSBCCoordinateParser();
   }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean; bankDetection?: BankDetectionResult }> {
+    let text = "";
+    let data: any;
+
     try {
+      // Try parsing with lenient options to handle corrupted PDFs
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data = await (pdfParse as any).default(buffer);
-      const text = data.text;
+      const parseOptions = {
+        max: 0, // Parse all pages
+        version: 'v1.10.100', // Use specific version
+      };
+
+      try {
+        data = await (pdfParse as any).default(buffer, parseOptions);
+        text = data.text;
+      } catch (initialError: any) {
+        console.error("Initial PDF parse failed:", initialError?.message || initialError);
+
+        // If initial parse fails (e.g., "bad XRef entry"), try coordinate-based parsing immediately
+        // This is more reliable for corrupted or non-standard PDFs
+        console.log("🔄 Attempting coordinate-based parsing as fallback for corrupted PDF...");
+
+        try {
+          const coordinateTransactions = await this.genericCoordinateParser.parseStatement(buffer, true);
+          if (coordinateTransactions.length > 0) {
+            console.log(`✅ Coordinate-based fallback successful: extracted ${coordinateTransactions.length} transactions`);
+            return {
+              transactions: coordinateTransactions,
+              metadata: {},
+              rawText: "",
+              needsOCR: false,
+            };
+          }
+        } catch (coordError) {
+          console.error("Coordinate-based fallback failed:", coordError);
+        }
+
+        // If coordinate parsing also failed, throw the original error
+        throw initialError;
+      }
 
       console.log("PDF Text extracted (first 1000 chars):", text.substring(0, 1000)); // Debug log
       console.log("PDF Text length:", text.length); // Debug log
