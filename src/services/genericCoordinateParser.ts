@@ -267,7 +267,7 @@ export class GenericCoordinateParser {
       const descEnd = columns.debit ? columns.debit.min : (columns.credit ? columns.credit.min : 999999);
 
       const descElements = row.elements.filter(
-        (el) => el.x > descStart && el.x < descEnd && !/^[\d,£$.]+$/.test(el.text.trim())
+        (el) => el.x > descStart && el.x < descEnd && !/^[+\-]?[\d,£$.]+$/.test(el.text.trim())
       );
       description = descElements.map((el) => el.text).join(" ").trim();
 
