@@ -125,13 +125,44 @@ export async function checkPageLimitMiddleware(req: Request, res: Response, next
     let user;
 
     if (!userId) {
-      // No user ID provided - create anonymous user with free tier
-      console.log(`🔒 [PAGE_LIMIT] No user ID found, creating anonymous user`);
-      const email = `anonymous_${Date.now()}@temp.local`;
-      user = await db.createUser(email);
-      req.userId = user.id;
-      console.log(`🔒 [PAGE_LIMIT] Created anonymous user: ${user.id} with plan: ${user.plan}`);
-      // Don't return here! Continue to check page limits for anonymous users
+      // No user ID provided - anonymous/free tier user
+      // These users are managed by localStorage on frontend for 3 free conversions
+      // Only check per-file page limit (5 pages max for free tier)
+      console.log(`🔒 [PAGE_LIMIT] No user ID found - anonymous free tier user`);
+
+      const pagesInFile = req.pagesInFile || 1;
+      const freeTierLimit = 5; // Free tier max pages per file
+
+      console.log(`🔒 [PAGE_LIMIT] Checking per-file limit for anonymous user:`, {
+        pagesInFile,
+        freeTierLimit,
+        willBlock: pagesInFile > freeTierLimit,
+      });
+
+      if (pagesInFile > freeTierLimit) {
+        console.log(`🚫 [PAGE_LIMIT] BLOCKING: File has ${pagesInFile} pages, exceeds free tier limit of ${freeTierLimit}`);
+
+        const suggestedTier = getSuggestedTierForPages(pagesInFile);
+        const response = {
+          error: 'File page limit exceeded',
+          code: 'FILE_PAGE_LIMIT_EXCEEDED',
+          pagesInFile,
+          maxPagesPerFile: freeTierLimit,
+          currentPlan: 'free',
+          suggestedPlan: suggestedTier,
+          suggestedPlanName: suggestedTier ? getPlanDetails(suggestedTier).name : undefined,
+          suggestedPlanPrice: suggestedTier ? getPlanDetails(suggestedTier).price : undefined,
+          suggestedMaxPages: suggestedTier ? getMaxPagesPerFile(suggestedTier) : undefined,
+          message: `This file has ${pagesInFile} pages. Free accounts can convert files up to ${freeTierLimit} pages.`,
+        };
+
+        console.log(`🚫 [PAGE_LIMIT] Sending 403 response:`, response);
+        return res.status(403).json(response);
+      }
+
+      console.log(`✅ [PAGE_LIMIT] Anonymous user passed per-file limit check (${pagesInFile}/${freeTierLimit} pages)`);
+      // Skip monthly/daily database checks for anonymous users - they use localStorage
+      return next();
     } else {
       req.userId = userId;
       user = await db.getUserById(userId);
