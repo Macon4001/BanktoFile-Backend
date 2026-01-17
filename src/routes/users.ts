@@ -82,4 +82,27 @@ router.get('/admin/analytics/plan-distribution', requireAdmin, async (req: Reque
   }
 });
 
+/**
+ * Get MRR over time
+ * Query params:
+ *   - days: number (default: 30)
+ */
+router.get('/admin/analytics/mrr-over-time', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const days = parseInt(req.query.days as string) || 30;
+    const data = await db.getMrrOverTime(days);
+
+    res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error('Error fetching MRR over time:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch MRR over time',
+    });
+  }
+});
+
 export default router;

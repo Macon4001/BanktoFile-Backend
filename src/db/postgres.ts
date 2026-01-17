@@ -1058,9 +1058,6 @@ export class PostgresStore {
       const params: (string | number)[] = [];
       let paramIndex = 1;
 
-      // Always exclude admin user from analytics
-      conditions.push(`u.email != 'Macon4001@gmail.com'`);
-
       // Filter out anonymous users if requested
       if (!includeAnonymous) {
         conditions.push(`u.email NOT LIKE '%@anonymous.local'`);
@@ -1179,7 +1176,6 @@ export class PostgresStore {
           COALESCE(SUM(cl.pages_converted), 0)::integer as total_pages_converted
         FROM users u
         LEFT JOIN conversion_logs cl ON u.id = cl.user_id
-        WHERE u.email != 'Macon4001@gmail.com'
       `);
 
       // Calculate MRR from plan distribution (excluding admin)
@@ -1189,7 +1185,7 @@ export class PostgresStore {
           COUNT(*)::integer as count
         FROM users
         WHERE email NOT LIKE '%@anonymous.local'
-          AND email != 'Macon4001@gmail.com'
+          AND email != 'macon4001@gmail.com'
           AND subscription_status = 'active'
         GROUP BY plan
       `);
@@ -1224,10 +1220,10 @@ export class PostgresStore {
         SELECT
           plan,
           COUNT(*)::integer as count,
-          ROUND((COUNT(*)::numeric / (SELECT COUNT(*) FROM users WHERE email NOT LIKE '%@anonymous.local' AND email != 'Macon4001@gmail.com')) * 100, 2) as percentage
+          ROUND((COUNT(*)::numeric / (SELECT COUNT(*) FROM users WHERE email NOT LIKE '%@anonymous.local' AND email != 'macon4001@gmail.com')) * 100, 2) as percentage
         FROM users
         WHERE email NOT LIKE '%@anonymous.local'
-          AND email != 'Macon4001@gmail.com'
+          AND email != 'macon4001@gmail.com'
         GROUP BY plan
         ORDER BY count DESC
       `);
@@ -1236,6 +1232,75 @@ export class PostgresStore {
       return result.rows.map((row) => ({
         ...row,
         mrr: (planPricing[row.plan] || 0) * row.count,
+      }));
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get MRR over time (last 30 days)
+  async getMrrOverTime(days: number = 30): Promise<Array<{ date: string; mrr: number }>> {
+    const client = await pool.connect();
+    try {
+      // Plan pricing mapping
+      const planPricing: Record<string, number> = {
+        free: 0,
+        basic: 20,
+        starter: 40,
+        professional: 60,
+        enterprise: 99,
+      };
+
+      // Generate a series of dates for the last N days
+      const result = await client.query(`
+        WITH RECURSIVE date_series AS (
+          SELECT CURRENT_DATE - INTERVAL '${days - 1} days' AS date
+          UNION ALL
+          SELECT date + INTERVAL '1 day'
+          FROM date_series
+          WHERE date < CURRENT_DATE
+        ),
+        daily_plans AS (
+          SELECT
+            ds.date,
+            u.plan,
+            COUNT(DISTINCT u.id)::integer as user_count
+          FROM date_series ds
+          CROSS JOIN users u
+          WHERE u.email != 'macon4001@gmail.com'
+            AND u.email NOT LIKE '%@anonymous.local'
+            AND u.subscription_status = 'active'
+            AND u.created_at::date <= ds.date
+            AND (u.current_period_end IS NULL OR u.current_period_end::date >= ds.date)
+          GROUP BY ds.date, u.plan
+        )
+        SELECT
+          date::text,
+          plan,
+          user_count
+        FROM daily_plans
+        ORDER BY date ASC, plan
+      `);
+
+      // Group by date and calculate MRR
+      const mrrByDate: Record<string, number> = {};
+
+      result.rows.forEach((row) => {
+        const date = row.date;
+        const plan = row.plan;
+        const count = row.user_count;
+        const planPrice = planPricing[plan] || 0;
+
+        if (!mrrByDate[date]) {
+          mrrByDate[date] = 0;
+        }
+        mrrByDate[date] += planPrice * count;
+      });
+
+      // Convert to array format
+      return Object.entries(mrrByDate).map(([date, mrr]) => ({
+        date,
+        mrr,
       }));
     } finally {
       client.release();
