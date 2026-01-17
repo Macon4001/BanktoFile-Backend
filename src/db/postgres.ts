@@ -1150,9 +1150,19 @@ export class PostgresStore {
     new_users_this_week: number;
     total_conversions: number;
     total_pages_converted: number;
+    total_mrr: number;
   }> {
     const client = await pool.connect();
     try {
+      // Plan pricing mapping
+      const planPricing: Record<string, number> = {
+        free: 0,
+        basic: 20,
+        starter: 40,
+        professional: 60,
+        enterprise: 99,
+      };
+
       const result = await client.query(`
         SELECT
           COUNT(DISTINCT u.id)::integer as total_users,
@@ -1168,28 +1178,61 @@ export class PostgresStore {
         LEFT JOIN conversion_logs cl ON u.id = cl.user_id
       `);
 
-      return result.rows[0];
+      // Calculate MRR from plan distribution (excluding admin)
+      const planResult = await client.query(`
+        SELECT
+          plan,
+          COUNT(*)::integer as count
+        FROM users
+        WHERE email NOT LIKE '%@anonymous.local'
+          AND email != 'Macon4001@gmail.com'
+          AND subscription_status = 'active'
+        GROUP BY plan
+      `);
+
+      const totalMrr = planResult.rows.reduce((sum, row) => {
+        return sum + ((planPricing[row.plan] || 0) * row.count);
+      }, 0);
+
+      return {
+        ...result.rows[0],
+        total_mrr: totalMrr,
+      };
     } finally {
       client.release();
     }
   }
 
   // Get plan distribution stats
-  async getPlanDistribution(): Promise<Array<{ plan: string; count: number; percentage: number }>> {
+  async getPlanDistribution(): Promise<Array<{ plan: string; count: number; percentage: number; mrr: number }>> {
     const client = await pool.connect();
     try {
+      // Plan pricing mapping
+      const planPricing: Record<string, number> = {
+        free: 0,
+        basic: 20,
+        starter: 40,
+        professional: 60,
+        enterprise: 99,
+      };
+
       const result = await client.query(`
         SELECT
           plan,
           COUNT(*)::integer as count,
-          ROUND((COUNT(*)::numeric / (SELECT COUNT(*) FROM users WHERE email NOT LIKE '%@anonymous.local')) * 100, 2) as percentage
+          ROUND((COUNT(*)::numeric / (SELECT COUNT(*) FROM users WHERE email NOT LIKE '%@anonymous.local' AND email != 'Macon4001@gmail.com')) * 100, 2) as percentage
         FROM users
         WHERE email NOT LIKE '%@anonymous.local'
+          AND email != 'Macon4001@gmail.com'
         GROUP BY plan
         ORDER BY count DESC
       `);
 
-      return result.rows;
+      // Add MRR calculation
+      return result.rows.map((row) => ({
+        ...row,
+        mrr: (planPricing[row.plan] || 0) * row.count,
+      }));
     } finally {
       client.release();
     }
