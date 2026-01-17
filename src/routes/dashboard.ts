@@ -12,10 +12,11 @@ const router = Router();
 router.get('/admin/stats', requireAdmin, async (req: Request, res: Response) => {
   try {
     // Fetch all stats in parallel
-    const [supportStats, feedbackSummary, blogPosts] = await Promise.all([
+    const [supportStats, feedbackSummary, blogPosts, userSummary] = await Promise.all([
       supportService.getSummaryStats(),
       db.getFeedbackSummary('week'),
       db.getAllBlogPosts(undefined, undefined, 'draft'),
+      db.getUserAnalyticsSummary(),
     ]);
 
     res.json({
@@ -36,6 +37,12 @@ router.get('/admin/stats', requireAdmin, async (req: Request, res: Response) => 
         // Blog - show count of draft posts
         blog: {
           draftCount: blogPosts.length,
+        },
+        // User analytics - show MRR and user counts
+        users: {
+          totalMrr: userSummary.total_mrr,
+          subscribedUsers: userSummary.subscribed_users,
+          activeSubscriptions: userSummary.active_subscriptions,
         },
       },
     });
