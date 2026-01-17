@@ -18,6 +18,7 @@ import eventsRoutes from "./routes/events.js";
 import feedbackRoutes from "./routes/feedback.js";
 import supportRoutes from "./routes/support.js";
 import dashboardRoutes from "./routes/dashboard.js";
+import usersRoutes from "./routes/users.js";
 import { ocrService } from "./services/ocrService.js";
 
 // Get __dirname equivalent in ES modules
@@ -77,6 +78,7 @@ app.use("/api/events", eventsRoutes);
 app.use("/api", feedbackRoutes);
 app.use("/api/support", supportRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/users", usersRoutes);
 
 // Sitemap and SEO routes
 app.use("/", sitemapRoutes);

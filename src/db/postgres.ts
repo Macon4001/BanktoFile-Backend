@@ -1030,6 +1030,170 @@ export class PostgresStore {
       client.release();
     }
   }
+
+  // ===== User Analytics Methods =====
+
+  // Get user analytics data with stats
+  async getUserAnalytics(options: {
+    includeAnonymous?: boolean;
+    plan?: string;
+    subscriptionStatus?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<{
+    users: Array<User & {
+      total_conversions: number;
+      total_pages_converted: number;
+      last_conversion_at: Date | null;
+      usage_percentage: number;
+    }>;
+    total: number;
+  }> {
+    const client = await pool.connect();
+    try {
+      const { includeAnonymous = true, plan, subscriptionStatus, limit = 50, offset = 0 } = options;
+
+      // Build WHERE clause conditions
+      const conditions: string[] = [];
+      const params: (string | number)[] = [];
+      let paramIndex = 1;
+
+      // Filter out anonymous users if requested
+      if (!includeAnonymous) {
+        conditions.push(`u.email NOT LIKE '%@anonymous.local'`);
+      }
+
+      // Filter by plan if provided
+      if (plan) {
+        conditions.push(`u.plan = $${paramIndex}`);
+        params.push(plan);
+        paramIndex++;
+      }
+
+      // Filter by subscription status if provided
+      if (subscriptionStatus) {
+        conditions.push(`u.subscription_status = $${paramIndex}`);
+        params.push(subscriptionStatus);
+        paramIndex++;
+      }
+
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      // Get total count
+      const countQuery = `
+        SELECT COUNT(*) as count
+        FROM users u
+        ${whereClause}
+      `;
+      const countResult = await client.query(countQuery, params);
+      const total = parseInt(countResult.rows[0].count);
+
+      // Get users with stats
+      params.push(limit);
+      const limitParam = `$${paramIndex}`;
+      paramIndex++;
+
+      params.push(offset);
+      const offsetParam = `$${paramIndex}`;
+
+      const query = `
+        SELECT
+          u.id,
+          u.email,
+          u.name,
+          u.plan,
+          u.subscription_status,
+          u.pages_used_today,
+          u.daily_pages_limit,
+          u.pages_used_monthly,
+          u.monthly_pages_limit,
+          u.files_used_monthly,
+          u.monthly_files_limit,
+          u.last_reset_date,
+          u.created_at,
+          u.current_period_start,
+          u.current_period_end,
+          COALESCE(COUNT(cl.id), 0)::integer as total_conversions,
+          COALESCE(SUM(cl.pages_converted), 0)::integer as total_pages_converted,
+          MAX(cl.timestamp) as last_conversion_at,
+          CASE
+            WHEN u.plan = 'free' THEN ROUND((u.pages_used_today::numeric / NULLIF(u.daily_pages_limit, 0)) * 100, 2)
+            ELSE ROUND((u.pages_used_monthly::numeric / NULLIF(u.monthly_pages_limit, 0)) * 100, 2)
+          END as usage_percentage
+        FROM users u
+        LEFT JOIN conversion_logs cl ON u.id = cl.user_id
+        ${whereClause}
+        GROUP BY u.id
+        ORDER BY u.created_at DESC
+        LIMIT ${limitParam} OFFSET ${offsetParam}
+      `;
+
+      const result = await client.query(query, params);
+
+      return {
+        users: result.rows,
+        total,
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get user analytics summary stats
+  async getUserAnalyticsSummary(): Promise<{
+    total_users: number;
+    subscribed_users: number;
+    free_users: number;
+    anonymous_users: number;
+    active_subscriptions: number;
+    new_users_today: number;
+    new_users_this_week: number;
+    total_conversions: number;
+    total_pages_converted: number;
+  }> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(`
+        SELECT
+          COUNT(DISTINCT u.id)::integer as total_users,
+          COUNT(DISTINCT CASE WHEN u.plan != 'free' THEN u.id END)::integer as subscribed_users,
+          COUNT(DISTINCT CASE WHEN u.plan = 'free' THEN u.id END)::integer as free_users,
+          COUNT(DISTINCT CASE WHEN u.email LIKE '%@anonymous.local' THEN u.id END)::integer as anonymous_users,
+          COUNT(DISTINCT CASE WHEN u.subscription_status = 'active' THEN u.id END)::integer as active_subscriptions,
+          COUNT(DISTINCT CASE WHEN u.created_at >= CURRENT_DATE THEN u.id END)::integer as new_users_today,
+          COUNT(DISTINCT CASE WHEN u.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN u.id END)::integer as new_users_this_week,
+          COALESCE(COUNT(cl.id), 0)::integer as total_conversions,
+          COALESCE(SUM(cl.pages_converted), 0)::integer as total_pages_converted
+        FROM users u
+        LEFT JOIN conversion_logs cl ON u.id = cl.user_id
+      `);
+
+      return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  // Get plan distribution stats
+  async getPlanDistribution(): Promise<Array<{ plan: string; count: number; percentage: number }>> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(`
+        SELECT
+          plan,
+          COUNT(*)::integer as count,
+          ROUND((COUNT(*)::numeric / (SELECT COUNT(*) FROM users WHERE email NOT LIKE '%@anonymous.local')) * 100, 2) as percentage
+        FROM users
+        WHERE email NOT LIKE '%@anonymous.local'
+        GROUP BY plan
+        ORDER BY count DESC
+      `);
+
+      return result.rows;
+    } finally {
+      client.release();
+    }
+  }
 }
 
 // Export singleton instance
