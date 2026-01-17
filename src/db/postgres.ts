@@ -1058,6 +1058,9 @@ export class PostgresStore {
       const params: (string | number)[] = [];
       let paramIndex = 1;
 
+      // Always exclude admin user from analytics
+      conditions.push(`u.email != 'Macon4001@gmail.com'`);
+
       // Filter out anonymous users if requested
       if (!includeAnonymous) {
         conditions.push(`u.email NOT LIKE '%@anonymous.local'`);
@@ -1176,6 +1179,7 @@ export class PostgresStore {
           COALESCE(SUM(cl.pages_converted), 0)::integer as total_pages_converted
         FROM users u
         LEFT JOIN conversion_logs cl ON u.id = cl.user_id
+        WHERE u.email != 'Macon4001@gmail.com'
       `);
 
       // Calculate MRR from plan distribution (excluding admin)
