@@ -13,11 +13,12 @@ declare module 'express-serve-static-core' {
 
 /**
  * Helper function to suggest the next tier based on page count
+ * Updated to suggest 'starter' (£40) as the primary upgrade path
  */
 function getSuggestedTierForPages(pages: number): PlanType | null {
   if (pages <= 5) return null; // Free tier is sufficient
-  if (pages <= 20) return 'basic';
-  if (pages <= 50) return 'starter';
+  // Skip 'basic' tier - go straight to 'starter' (£40) as the recommended upgrade
+  if (pages <= 50) return 'starter'; // Most popular tier
   if (pages <= 100) return 'professional';
   return 'enterprise'; // Unlimited
 }
@@ -82,38 +83,8 @@ export async function checkPageLimitMiddleware(req: Request, res: Response, next
       console.log('⚠️  [PAGE_LIMIT] Monthly usage limits disabled (development mode)');
       req.userId = 'dev-user';
 
-      // Still check per-file page limits even in dev mode
-      const pagesInFile = req.pagesInFile || 1;
-      const freeTierLimit = 5; // Free tier max pages per file
-
-      console.log(`🔒 [PAGE_LIMIT] Checking per-file limit:`, {
-        pagesInFile,
-        freeTierLimit,
-        willBlock: pagesInFile > freeTierLimit,
-      });
-
-      if (pagesInFile > freeTierLimit) {
-        console.log(`🚫 [PAGE_LIMIT] BLOCKING: File has ${pagesInFile} pages, exceeds free tier limit of ${freeTierLimit}`);
-
-        const suggestedTier = getSuggestedTierForPages(pagesInFile);
-        const response = {
-          error: 'File page limit exceeded',
-          code: 'FILE_PAGE_LIMIT_EXCEEDED',
-          pagesInFile,
-          maxPagesPerFile: freeTierLimit,
-          currentPlan: 'free',
-          suggestedPlan: suggestedTier,
-          suggestedPlanName: suggestedTier ? getPlanDetails(suggestedTier).name : undefined,
-          suggestedPlanPrice: suggestedTier ? getPlanDetails(suggestedTier).price : undefined,
-          suggestedMaxPages: suggestedTier ? getMaxPagesPerFile(suggestedTier) : undefined,
-          message: `This file has ${pagesInFile} pages. Free accounts can convert files up to ${freeTierLimit} pages.`,
-        };
-
-        console.log(`🚫 [PAGE_LIMIT] Sending 403 response:`, response);
-        return res.status(403).json(response);
-      }
-
-      console.log(`✅ [PAGE_LIMIT] File passed per-file limit check (${pagesInFile}/${freeTierLimit} pages)`);
+      // In development mode, skip ALL page limit checks
+      console.log(`✅ [PAGE_LIMIT] Development mode - skipping all page limit checks`);
       return next();
     }
 
