@@ -91,82 +91,127 @@ router.post('/stripe', async (req: Request, res: Response) => {
 // Handle checkout session completed
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleCheckoutComplete(session: any) {
-  const userId = session.metadata?.userId || session.client_reference_id;
-  const plan = session.metadata?.plan as PlanType;
+  try {
+    console.log('[WEBHOOK] handleCheckoutComplete - session ID:', session.id);
 
-  if (!userId || !plan) {
-    console.error('Missing userId or plan in checkout session');
-    return;
-  }
+    const userId = session.metadata?.userId || session.client_reference_id;
+    const plan = session.metadata?.plan as PlanType;
 
-  const user = await db.getUserById(userId);
-  if (!user) {
-    console.error('User not found:', userId);
-    return;
-  }
-
-  // Fetch the subscription to get period dates
-  let periodStart: Date | undefined;
-  let periodEnd: Date | undefined;
-
-  if (session.subscription) {
-    try {
-      const subscription = await stripe.subscriptions.retrieve(session.subscription as string) as unknown as StripeSubscriptionWithPeriod;
-      periodStart = new Date(subscription.current_period_start * 1000);
-      periodEnd = new Date(subscription.current_period_end * 1000);
-      console.log(`Retrieved subscription periods: ${periodStart.toISOString()} to ${periodEnd.toISOString()}`);
-    } catch (error) {
-      console.error('Error fetching subscription from checkout session:', error);
-      // Continue anyway - subscription.created webhook will set these later
+    if (!userId || !plan) {
+      console.error('[WEBHOOK] Missing userId or plan in checkout session');
+      return;
     }
+
+    const user = await db.getUserById(userId);
+    if (!user) {
+      console.error('[WEBHOOK] User not found:', userId);
+      return;
+    }
+
+    console.log('[WEBHOOK] Found user:', user.email, 'plan:', plan);
+
+    // Fetch the subscription to get period dates
+    let periodStart: Date | undefined;
+    let periodEnd: Date | undefined;
+
+    if (session.subscription) {
+      try {
+        const subscription = await stripe.subscriptions.retrieve(session.subscription as string) as unknown as StripeSubscriptionWithPeriod;
+
+        // Validate timestamps before creating dates
+        if (subscription.current_period_start && typeof subscription.current_period_start === 'number') {
+          periodStart = new Date(subscription.current_period_start * 1000);
+        }
+        if (subscription.current_period_end && typeof subscription.current_period_end === 'number') {
+          periodEnd = new Date(subscription.current_period_end * 1000);
+        }
+
+        console.log(`[WEBHOOK] Retrieved subscription periods: ${periodStart?.toISOString()} to ${periodEnd?.toISOString()}`);
+      } catch (error) {
+        console.error('[WEBHOOK] Error fetching subscription from checkout session:', error);
+        // Continue anyway - subscription.created webhook will set these later
+      }
+    }
+
+    // Update user with customer ID and reset usage
+    await db.updateUser(userId, {
+      stripe_customer_id: session.customer as string,
+      subscription_id: session.subscription as string,
+      plan: plan,
+      monthly_files_limit: getFilesLimit(plan), // Set FILES limit, not pages
+      files_used_monthly: 0, // Reset file usage on new purchase
+      subscription_status: 'active',
+      ...(periodStart && { current_period_start: periodStart }),
+      ...(periodEnd && { current_period_end: periodEnd }),
+    });
+
+    console.log(`[WEBHOOK] ✅ Checkout completed for user ${userId}, plan: ${plan}, limit: ${getFilesLimit(plan)} files`);
+  } catch (error) {
+    console.error('[WEBHOOK] ❌ Error in handleCheckoutComplete:', error);
+    throw error;
   }
-
-  // Update user with customer ID and reset usage
-  await db.updateUser(userId, {
-    stripe_customer_id: session.customer as string,
-    subscription_id: session.subscription as string,
-    plan: plan,
-    monthly_files_limit: getFilesLimit(plan), // Set FILES limit, not pages
-    files_used_monthly: 0, // Reset file usage on new purchase
-    subscription_status: 'active',
-    ...(periodStart && { current_period_start: periodStart }),
-    ...(periodEnd && { current_period_end: periodEnd }),
-  });
-
-  console.log(`Checkout completed for user ${userId}, plan: ${plan}, limit: ${getFilesLimit(plan)} files, period: ${periodStart?.toISOString()} to ${periodEnd?.toISOString()}`);
 }
 
 // Handle subscription updates
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleSubscriptionUpdate(subscription: any) {
-  const userId = subscription.metadata?.userId;
+  try {
+    console.log('[WEBHOOK] handleSubscriptionUpdate - subscription ID:', subscription.id);
 
-  if (!userId) {
-    console.error('Missing userId in subscription metadata');
-    return;
-  }
+    const userId = subscription.metadata?.userId;
+    const plan = subscription.metadata?.plan as PlanType;
 
-  const user = await db.getUserById(userId);
-  if (!user) {
-    console.error('User not found:', userId);
-    return;
-  }
+    if (!userId) {
+      console.error('[WEBHOOK] Missing userId in subscription metadata');
+      return;
+    }
 
-  const plan = subscription.metadata?.plan as PlanType;
-  const subWithPeriod = subscription as unknown as StripeSubscriptionWithPeriod;
+    if (!plan) {
+      console.error('[WEBHOOK] Missing plan in subscription metadata');
+      return;
+    }
 
-  await db.updateUser(userId, {
-    subscription_id: subscription.id,
-    subscription_status: subscription.status as 'active' | 'canceled' | 'past_due' | 'trialing' | 'incomplete' | 'incomplete_expired' | 'unpaid',
-    current_period_start: new Date(subWithPeriod.current_period_start * 1000),
-    current_period_end: new Date(subWithPeriod.current_period_end * 1000),
-    ...(plan && {
+    const user = await db.getUserById(userId);
+    if (!user) {
+      console.error('[WEBHOOK] User not found:', userId);
+      return;
+    }
+
+    console.log('[WEBHOOK] Found user:', user.email, 'plan:', plan);
+
+    // Extract period dates - Stripe uses unix timestamps (seconds)
+    // Get the first subscription item's period
+    const periodStart = subscription.current_period_start || subscription.billing_cycle_anchor;
+    const periodEnd = subscription.current_period_end;
+
+    console.log('[WEBHOOK] Period timestamps:', { periodStart, periodEnd });
+
+    // Build update object - only include dates if they're valid
+    const updateData: any = {
+      stripe_customer_id: subscription.customer,
+      subscription_id: subscription.id,
+      subscription_status: subscription.status as 'active' | 'canceled' | 'past_due' | 'trialing' | 'incomplete' | 'incomplete_expired' | 'unpaid',
       plan: plan,
       monthly_files_limit: getFilesLimit(plan),
-    }),
-  });
+    };
 
-  console.log(`Subscription updated for user ${userId}`);
+    // Only add dates if they exist and are valid numbers
+    if (periodStart && typeof periodStart === 'number' && !isNaN(periodStart)) {
+      updateData.current_period_start = new Date(periodStart * 1000);
+    }
+    if (periodEnd && typeof periodEnd === 'number' && !isNaN(periodEnd)) {
+      updateData.current_period_end = new Date(periodEnd * 1000);
+    }
+
+    console.log('[WEBHOOK] Updating user with:', updateData);
+
+    await db.updateUser(userId, updateData);
+
+    console.log(`[WEBHOOK] ✅ Subscription updated for user ${userId}, plan: ${plan}`);
+  } catch (error) {
+    console.error('[WEBHOOK] ❌ Error in handleSubscriptionUpdate:', error);
+    throw error;
+  }
 }
 
 // Handle subscription deleted/canceled
