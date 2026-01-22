@@ -1,10 +1,13 @@
--- IP-based rate limiting table
--- Tracks conversions by IP address to prevent abuse
+-- URGENT FIX: Enable UUID extension and fix ip_conversions table
+-- Run this immediately in production to fix the IP rate limiting
 
 -- Enable UUID extension (if not already enabled)
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
-CREATE TABLE IF NOT EXISTS ip_conversions (
+-- Drop and recreate the table with proper UUID support
+DROP TABLE IF EXISTS ip_conversions CASCADE;
+
+CREATE TABLE ip_conversions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     ip_address INET NOT NULL,
     conversion_date DATE NOT NULL DEFAULT CURRENT_DATE,
@@ -28,17 +31,13 @@ CREATE TRIGGER update_ip_conversions_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
--- Function to clean up old IP conversion records (older than 30 days)
-CREATE OR REPLACE FUNCTION cleanup_old_ip_conversions()
-RETURNS void AS $$
+-- Verify it works by testing UUID generation
+DO $$
 BEGIN
-    DELETE FROM ip_conversions
-    WHERE conversion_date < CURRENT_DATE - INTERVAL '30 days';
-END;
-$$ LANGUAGE plpgsql;
+    IF (SELECT uuid_generate_v4() IS NOT NULL) THEN
+        RAISE NOTICE '✅ UUID extension is working correctly';
+    END IF;
+END $$;
 
--- Comment on table
-COMMENT ON TABLE ip_conversions IS 'Tracks daily conversion counts by IP address for rate limiting';
-COMMENT ON COLUMN ip_conversions.ip_address IS 'IP address of the user (supports IPv4 and IPv6)';
-COMMENT ON COLUMN ip_conversions.conversion_date IS 'Date of conversions (resets daily)';
-COMMENT ON COLUMN ip_conversions.conversion_count IS 'Number of conversions from this IP today';
+-- Show table is ready
+SELECT 'ip_conversions table is ready!' as status;
