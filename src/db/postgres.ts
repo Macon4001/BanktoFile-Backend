@@ -129,6 +129,15 @@ export interface FeedbackSummary {
   total_count: number;
 }
 
+export interface IpConversion {
+  id: string;
+  ip_address: string;
+  conversion_date: string;
+  conversion_count: number;
+  created_at: Date;
+  updated_at: Date;
+}
+
 // Create connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -1302,6 +1311,88 @@ export class PostgresStore {
         date,
         mrr,
       }));
+    } finally {
+      client.release();
+    }
+  }
+
+  // ===== IP Rate Limiting Methods =====
+
+  /**
+   * Check if an IP address can perform a conversion today
+   * Returns true if under the limit (3 conversions per day for anonymous users)
+   */
+  async canConvertByIp(ipAddress: string, dailyLimit: number = 3): Promise<boolean> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<IpConversion>(
+        `SELECT conversion_count FROM ip_conversions
+         WHERE ip_address = $1 AND conversion_date = CURRENT_DATE`,
+        [ipAddress]
+      );
+
+      if (!result.rows[0]) {
+        // No record for today, they can convert
+        return true;
+      }
+
+      // Check if under the limit
+      return result.rows[0].conversion_count < dailyLimit;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Get the current conversion count for an IP address today
+   */
+  async getIpConversionCount(ipAddress: string): Promise<number> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query<IpConversion>(
+        `SELECT conversion_count FROM ip_conversions
+         WHERE ip_address = $1 AND conversion_date = CURRENT_DATE`,
+        [ipAddress]
+      );
+
+      return result.rows[0]?.conversion_count || 0;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Increment the conversion count for an IP address
+   * Uses upsert to create a new record or increment existing one
+   */
+  async incrementIpConversionCount(ipAddress: string): Promise<void> {
+    const client = await pool.connect();
+    try {
+      await client.query(
+        `INSERT INTO ip_conversions (ip_address, conversion_date, conversion_count)
+         VALUES ($1, CURRENT_DATE, 1)
+         ON CONFLICT (ip_address, conversion_date)
+         DO UPDATE SET
+           conversion_count = ip_conversions.conversion_count + 1,
+           updated_at = NOW()`,
+        [ipAddress]
+      );
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Clean up old IP conversion records (older than specified days)
+   */
+  async cleanupOldIpConversions(daysToKeep: number = 30): Promise<number> {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(
+        `DELETE FROM ip_conversions
+         WHERE conversion_date < CURRENT_DATE - INTERVAL '${daysToKeep} days'`
+      );
+      return result.rowCount ?? 0;
     } finally {
       client.release();
     }

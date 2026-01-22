@@ -6,6 +6,10 @@ import {
   checkPageLimitMiddleware,
   logConversionMiddleware,
 } from "../middleware/pageLimitMiddleware.js";
+import {
+  checkIpRateLimitMiddleware,
+  logIpConversionMiddleware,
+} from "../middleware/ipRateLimitMiddleware.js";
 
 const router = Router();
 const uploadController = new UploadController();
@@ -15,7 +19,7 @@ const storage = multer.memoryStorage();
 const upload = multer({
   storage,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: process.env.NODE_ENV === 'development' ? Infinity : 10 * 1024 * 1024, // Unlimited in dev, 10MB in production
   },
   fileFilter: (_req, file, cb) => {
     const allowedMimeTypes = [
@@ -39,32 +43,37 @@ const upload = multer({
 router.post(
   "/upload",
   upload.single("file"),
+  checkIpRateLimitMiddleware,  // Check IP-based rate limiting first (for anonymous users)
   countPagesMiddleware,
   checkPageLimitMiddleware,
-  logConversionMiddleware,
+  logIpConversionMiddleware,   // Log IP-based conversions (for anonymous users)
+  logConversionMiddleware,      // Log user-based conversions (for authenticated users)
   (req, res) => {
     uploadController.handleUpload(req, res);
   }
 );
 
 // Error handling middleware for multer errors
-router.use((err: Error, req: any, res: any, next: any) => {
+router.use((err: Error, _req: unknown, res: unknown, next: unknown) => {
   console.error("Upload route error:", err);
+  const response = res as { status: (code: number) => { json: (data: unknown) => void } };
+  const nextFn = next as () => void;
+
   if (err instanceof multer.MulterError) {
     if (err.code === "LIMIT_FILE_SIZE") {
-      return res.status(400).json({
+      return response.status(400).json({
         error: "File size exceeds 10MB limit",
       });
     }
-    return res.status(400).json({
+    return response.status(400).json({
       error: `Upload error: ${err.message}`,
     });
   } else if (err) {
-    return res.status(400).json({
+    return response.status(400).json({
       error: err.message || "File upload failed",
     });
   }
-  next();
+  nextFn();
 });
 
 export default router;
