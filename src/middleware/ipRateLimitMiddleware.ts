@@ -5,6 +5,8 @@ import { db } from '../db/postgres.js';
 declare module 'express-serve-static-core' {
   interface Request {
     clientIp?: string;
+    ipConversionsUsed?: number;
+    userId?: string;
   }
 }
 
@@ -80,6 +82,9 @@ export async function checkIpRateLimitMiddleware(
 
     console.log(`🔒 [IP_RATE_LIMIT] IP ${clientIp}: ${currentCount}/${dailyLimit} conversions today`);
 
+    // Store current count in request for use in response
+    req.ipConversionsUsed = currentCount;
+
     if (!canConvert) {
       console.log(`🚫 [IP_RATE_LIMIT] BLOCKING: IP ${clientIp} has exceeded daily limit (${currentCount}/${dailyLimit})`);
 
@@ -129,15 +134,27 @@ export function logIpConversionMiddleware(
       if (!userId && clientIp) {
         console.log(`📊 [IP_RATE_LIMIT] Logging conversion for IP: ${clientIp}`);
 
+        // Get the count BEFORE this conversion (stored in request)
+        const previousCount = req.ipConversionsUsed || 0;
+        const newCount = previousCount + 1;
+
         // Increment IP conversion count asynchronously
         db.incrementIpConversionCount(clientIp)
-          .then(async () => {
-            const newCount = await db.getIpConversionCount(clientIp);
+          .then(() => {
             console.log(`✅ [IP_RATE_LIMIT] IP ${clientIp} now has ${newCount} conversions today`);
           })
           .catch((err) => {
             console.error('❌ [IP_RATE_LIMIT] Error logging IP conversion:', err);
           });
+
+        // Add IP usage info to response body for frontend
+        body.ipUsage = {
+          conversionsUsed: newCount,
+          dailyLimit: 3,
+          conversionsRemaining: Math.max(0, 3 - newCount),
+        };
+
+        console.log(`📊 [IP_RATE_LIMIT] Adding IP usage to response: ${newCount}/3 (${3 - newCount} remaining)`);
       }
     }
 
