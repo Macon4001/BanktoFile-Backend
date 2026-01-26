@@ -1,15 +1,22 @@
 import Tesseract from 'tesseract.js';
 import { Transaction, ParsedStatement } from '../types/index.js';
+import { googleVisionOCRService, GoogleVisionConfig } from './googleVisionOCR.js';
+
+export type OCRProvider = 'tesseract' | 'google-vision' | 'auto';
 
 export class OCRService {
   private scheduler: Tesseract.Scheduler | null = null;
+  private preferredProvider: OCRProvider = 'auto';
 
   /**
-   * Initialize the Tesseract scheduler with workers for better performance
+   * Initialize OCR services (both Tesseract and Google Vision)
    * Call this once at server startup
    */
-  async initialize(numWorkers: number = 2): Promise<void> {
-    console.log(`Initializing OCR service with ${numWorkers} workers...`);
+  async initialize(numWorkers: number = 2, googleVisionConfig?: GoogleVisionConfig): Promise<void> {
+    console.log(`Initializing OCR services...`);
+
+    // Initialize Tesseract
+    console.log(`Setting up Tesseract with ${numWorkers} workers...`);
     this.scheduler = await Tesseract.createScheduler();
 
     for (let i = 0; i < numWorkers; i++) {
@@ -23,7 +30,19 @@ export class OCRService {
       this.scheduler.addWorker(worker);
     }
 
-    console.log('OCR service initialized successfully');
+    console.log('✅ Tesseract OCR initialized successfully');
+
+    // Initialize Google Vision (optional)
+    await googleVisionOCRService.initialize(googleVisionConfig);
+
+    // Set preferred provider based on availability
+    if (googleVisionOCRService.isEnabled()) {
+      this.preferredProvider = 'auto'; // Will use Google Vision as fallback
+      console.log('OCR Strategy: Tesseract first, Google Vision fallback');
+    } else {
+      this.preferredProvider = 'tesseract';
+      console.log('OCR Strategy: Tesseract only');
+    }
   }
 
   /**
@@ -39,29 +58,74 @@ export class OCRService {
 
   /**
    * Perform OCR on a PDF buffer and extract text
-   * Returns the extracted text and confidence score
+   * Tries multiple providers with intelligent fallback
    */
-  async extractTextFromPDF(pdfBuffer: Buffer): Promise<{ text: string; confidence: number }> {
-    try {
-      console.log('Starting OCR on PDF...');
-      const startTime = Date.now();
+  async extractTextFromPDF(
+    pdfBuffer: Buffer,
+    provider: OCRProvider = 'auto'
+  ): Promise<{ text: string; confidence: number; provider: string; pageCount?: number }> {
+    const effectiveProvider = provider === 'auto' ? this.preferredProvider : provider;
 
-      // Convert PDF buffer to image using pdf-poppler or similar
-      // For now, we'll assume the PDF is actually an image-based PDF
-      // and process it directly with Tesseract
+    // Strategy: Try Tesseract first (free), fall back to Google Vision if needed
+    if (effectiveProvider === 'auto') {
+      try {
+        console.log('🔍 Trying Tesseract OCR first...');
+        const result = await this.extractTextWithTesseract(pdfBuffer);
+
+        // If Tesseract worked well (good confidence and reasonable text length)
+        if (result.confidence > 60 && result.text.length > 100) {
+          console.log('✅ Tesseract OCR successful');
+          return { ...result, provider: 'tesseract' };
+        }
+
+        // If Tesseract had low confidence or poor results, try Google Vision
+        if (googleVisionOCRService.isEnabled()) {
+          console.log('⚠️  Tesseract confidence low, trying Google Vision...');
+          return await this.extractTextWithGoogleVision(pdfBuffer);
+        }
+
+        // No fallback available, return Tesseract result
+        console.log('⚠️  Tesseract confidence low but no fallback available');
+        return { ...result, provider: 'tesseract' };
+      } catch (tesseractError) {
+        console.error('Tesseract OCR failed:', tesseractError);
+
+        // Try Google Vision as fallback
+        if (googleVisionOCRService.isEnabled()) {
+          console.log('🔄 Falling back to Google Vision OCR...');
+          return await this.extractTextWithGoogleVision(pdfBuffer);
+        }
+
+        throw tesseractError;
+      }
+    } else if (effectiveProvider === 'google-vision') {
+      return await this.extractTextWithGoogleVision(pdfBuffer);
+    } else {
+      const result = await this.extractTextWithTesseract(pdfBuffer);
+      return { ...result, provider: 'tesseract' };
+    }
+  }
+
+  /**
+   * Extract text using Tesseract OCR
+   */
+  private async extractTextWithTesseract(pdfBuffer: Buffer): Promise<{ text: string; confidence: number }> {
+    try {
+      console.log('Starting Tesseract OCR...');
+      const startTime = Date.now();
 
       // Note: Tesseract.js can work with PDF buffers directly
       const { data } = await Tesseract.recognize(pdfBuffer, 'eng', {
         logger: (m) => {
           if (m.status === 'recognizing text') {
-            console.log(`OCR Progress: ${Math.round(m.progress * 100)}%`);
+            console.log(`Tesseract Progress: ${Math.round(m.progress * 100)}%`);
           }
         },
       });
 
       const endTime = Date.now();
-      console.log(`OCR completed in ${(endTime - startTime) / 1000}s`);
-      console.log(`OCR Confidence: ${data.confidence}%`);
+      console.log(`Tesseract completed in ${(endTime - startTime) / 1000}s`);
+      console.log(`Tesseract Confidence: ${data.confidence}%`);
       console.log(`Extracted text length: ${data.text.length} characters`);
 
       return {
@@ -69,8 +133,32 @@ export class OCRService {
         confidence: data.confidence,
       };
     } catch (error) {
-      console.error('OCR error:', error);
-      throw new Error('Failed to perform OCR on PDF');
+      console.error('Tesseract OCR error:', error);
+      throw new Error('Failed to perform OCR with Tesseract');
+    }
+  }
+
+  /**
+   * Extract text using Google Vision OCR
+   */
+  private async extractTextWithGoogleVision(
+    pdfBuffer: Buffer
+  ): Promise<{ text: string; confidence: number; provider: string; pageCount: number }> {
+    if (!googleVisionOCRService.isEnabled()) {
+      throw new Error('Google Vision OCR is not enabled');
+    }
+
+    try {
+      const result = await googleVisionOCRService.extractTextFromPDF(pdfBuffer);
+      return {
+        text: result.text,
+        confidence: result.confidence,
+        provider: 'google-vision',
+        pageCount: result.pageCount,
+      };
+    } catch (error) {
+      console.error('Google Vision OCR error:', error);
+      throw new Error('Failed to perform OCR with Google Vision');
     }
   }
 
@@ -99,22 +187,6 @@ export class OCRService {
   private cleanOCRText(text: string): string {
     let cleaned = text;
 
-    // Common OCR mistakes for bank statements
-    const replacements: Record<string, string> = {
-      // Currency symbols
-      'E': '£',
-      '€': '£',
-
-      // Numbers
-      'O': '0',  // Letter O to zero
-      'o': '0',  // Lowercase o to zero
-      'I': '1',  // Letter I to one
-      'l': '1',  // Lowercase L to one
-      'S': '5',  // Sometimes S is confused with 5
-      'B': '8',  // Sometimes B is confused with 8
-      'Z': '2',  // Sometimes Z is confused with 2
-    };
-
     // Apply replacements in number contexts only
     // Match patterns like "E123.45" or "O1/12/2024"
     cleaned = cleaned.replace(/([£$])\s*[EÃ¢â€š¬]/g, '$1'); // Fix currency symbols
@@ -127,7 +199,7 @@ export class OCRService {
     cleaned = cleaned.replace(/\b[O](\d{1})\/(\d{2})\/(\d{4})/g, '0$1/$2/$3');
 
     // Fix decimal points: "45.S7" -> "45.57"
-    cleaned = cleaned.replace(/(\d+\.)([SB])(\d)/g, (match, p1, p2, p3) => {
+    cleaned = cleaned.replace(/(\d+\.)([SB])(\d)/g, (_match, p1, p2, p3) => {
       const num = p2 === 'S' ? '5' : '8';
       return p1 + num + p3;
     });
@@ -145,8 +217,8 @@ export class OCRService {
 
     // Date patterns
     const datePatterns = [
-      /\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/,
-      /\b(\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})\b/,
+      /\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\b/,
+      /\b(\d{4}[/-]\d{1,2}[/-]\d{1,2})\b/,
       /\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{2,4})\b/i,
     ];
 
@@ -224,7 +296,7 @@ export class OCRService {
     }
 
     // Extract statement period
-    const periodMatch = text.match(/(?:statement\s+period|period)\s*:?\s*([\w\s,\-\/]+)/gi);
+    const periodMatch = text.match(/(?:statement\s+period|period)\s*:?\s*([\w\s,\-/]+)/gi);
     if (periodMatch) {
       metadata.statementPeriod = periodMatch[0].split(':')[1]?.trim();
     }
@@ -235,15 +307,45 @@ export class OCRService {
   /**
    * Full OCR pipeline: extract text and parse transactions
    */
-  async processScannedPDF(pdfBuffer: Buffer): Promise<ParsedStatement & { confidence: number; usedOCR: boolean }> {
-    const { text, confidence } = await this.extractTextFromPDF(pdfBuffer);
-    const parsed = this.parseOCRText(text);
+  async processScannedPDF(
+    pdfBuffer: Buffer,
+    provider: OCRProvider = 'auto'
+  ): Promise<ParsedStatement & { confidence: number; usedOCR: boolean; ocrProvider?: string; pageCount?: number }> {
+    const ocrResult = await this.extractTextFromPDF(pdfBuffer, provider);
+    const parsed = this.parseOCRText(ocrResult.text);
+
+    // Log OCR usage for cost tracking
+    this.logOCRUsage(ocrResult);
 
     return {
       ...parsed,
-      confidence,
+      confidence: ocrResult.confidence,
       usedOCR: true,
+      ocrProvider: ocrResult.provider,
+      pageCount: ocrResult.pageCount,
     };
+  }
+
+  /**
+   * Log OCR usage for monitoring and cost tracking
+   */
+  private logOCRUsage(result: { provider: string; confidence: number; pageCount?: number }): void {
+    const timestamp = new Date().toISOString();
+    const logMessage = {
+      timestamp,
+      provider: result.provider,
+      confidence: result.confidence,
+      pageCount: result.pageCount || 1,
+      estimatedCost:
+        result.provider === 'google-vision' && result.pageCount
+          ? (result.pageCount * 0.0015).toFixed(4)
+          : '0.0000',
+    };
+
+    console.log('📊 OCR Usage:', JSON.stringify(logMessage));
+
+    // TODO: Store in database for cost tracking and analytics
+    // This could be added later for production monitoring
   }
 }
 

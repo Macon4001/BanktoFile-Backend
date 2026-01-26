@@ -3,7 +3,7 @@ import { PDFParser } from "../services/pdfParser.js";
 import { CSVParser } from "../services/csvParser.js";
 import { CSVGenerator } from "../services/csvGenerator.js";
 import { XLSXGenerator } from "../services/xlsxGenerator.js";
-// import { ocrService } from "../services/ocrService.js"; // Reserved for future OCR features
+import { ocrService } from "../services/ocrService.js";
 import { ParsedStatement } from "../types/index.js";
 
 export class UploadController {
@@ -50,15 +50,24 @@ export class UploadController {
 
         // Check if OCR is needed (scanned PDF or no transactions found)
         if (pdfResult.needsOCR) {
-          console.log("⚠️  PDF parsing found no transactions");
-          console.log("🔧 OCR is disabled - fix the parser instead!");
-          // For now, return the result even if empty so we can see what's wrong
-          parsedData = pdfResult;
+          console.log("⚠️  Standard PDF parsing found no transactions - trying OCR fallback");
 
-          // TODO: Re-enable OCR only for truly scanned documents
-          // if (pdfResult.rawText && pdfResult.rawText.length < 100) {
-          //   console.log("📸 PDF is scanned - would use OCR here");
-          // }
+          try {
+            // Try OCR with automatic provider selection (Tesseract first, Google Vision fallback)
+            console.log("🔍 OCR Fallback triggered");
+            const ocrResult = await ocrService.processScannedPDF(file.buffer, 'auto');
+
+            console.log(`✅ OCR extracted ${ocrResult.transactions.length} transactions using ${ocrResult.ocrProvider}`);
+
+            parsedData = {
+              ...pdfResult,
+              ...ocrResult,
+            };
+          } catch (ocrError) {
+            console.error("❌ OCR fallback failed:", ocrError);
+            // Return original result if OCR fails
+            parsedData = pdfResult;
+          }
         } else {
           // Standard PDF parsing worked
           console.log("✅ Standard PDF parsing successful");

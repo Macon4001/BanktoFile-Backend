@@ -126,7 +126,7 @@ export class PDFParser {
       }
 
       // Extract transactions from the PDF text (for other banks)
-      let transactions = this.extractTransactions(text);
+      let transactions = await this.extractTransactions(text, buffer);
 
       console.log(`Extracted ${transactions.length} transactions using text-based parsing`); // Debug log
       if (transactions.length > 0) {
@@ -227,9 +227,15 @@ export class PDFParser {
     return false;
   }
 
-  private extractTransactions(text: string): Transaction[] {
+  private async extractTransactions(text: string, buffer?: Buffer): Promise<Transaction[]> {
     const transactions: Transaction[] = [];
     const lines = text.split("\n");
+
+    // Check if this is an RBS (Royal Bank of Scotland) statement
+    if (text.includes("RBOSGB2L") || text.includes("Royal Bank of Scotland") || text.includes("BUSINESS CURRENT ACCOUNT")) {
+      console.log("Detected RBS (Royal Bank of Scotland) bank statement");
+      return this.extractRBSTransactions(text, buffer);
+    }
 
     // Check if this is a NatWest statement
     if (text.includes("National Westminster Bank") || text.includes("NATWEST") || text.includes("NatWest")) {
@@ -864,15 +870,54 @@ export class PDFParser {
         const absAmount1 = Math.abs(amount1);
         const absAmount2 = Math.abs(amount2);
 
-        // The smaller absolute value is usually the transaction amount
+        // The smaller absolute value is usually the transaction amount, larger is balance
+        // BUT we need to determine if it's debit or credit based on balance movement
         if (absAmount1 < absAmount2) {
+          // amount1 is the transaction, amount2 is the balance
           amount = amount1;
           balance = amount2;
-          type = 'debit';
+
+          // Determine type by checking if this is the first transaction or by balance comparison
+          if (transactions.length > 0) {
+            const prevBalance = transactions[transactions.length - 1].balance || 0;
+            const balanceChange = balance - prevBalance;
+
+            // If balance increased, it's a credit (money in)
+            // If balance decreased, it's a debit (money out)
+            if (Math.abs(balanceChange - amount) < 0.01) {
+              type = 'credit';
+            } else if (Math.abs(balanceChange + amount) < 0.01) {
+              type = 'debit';
+            } else {
+              // Fallback: use balance sign
+              type = 'debit';
+            }
+          } else {
+            // First transaction - assume debit
+            type = 'debit';
+          }
         } else {
-          amount = absAmount2; // Use absolute value for amount
+          // amount2 is the transaction, keep as absolute value
+          amount = absAmount2;
           balance = amount2;   // Keep balance as-is (can be negative)
-          type = amount2 < 0 ? 'debit' : 'credit'; // If balance went negative, it's a debit
+
+          // Determine type based on previous balance
+          if (transactions.length > 0) {
+            const prevBalance = transactions[transactions.length - 1].balance || 0;
+            const balanceChange = balance - prevBalance;
+
+            if (Math.abs(balanceChange - amount) < 0.01) {
+              type = 'credit';
+            } else if (Math.abs(balanceChange + amount) < 0.01) {
+              type = 'debit';
+            } else {
+              // Fallback: if balance went negative, it's a debit
+              type = amount2 < 0 ? 'debit' : 'credit';
+            }
+          } else {
+            // First transaction
+            type = amount2 < 0 ? 'debit' : 'credit';
+          }
         }
 
         // Add reference to description
@@ -1182,6 +1227,473 @@ export class PDFParser {
     }
 
     console.log(`Extracted ${transactions.length} NatWest transactions`);
+    return transactions;
+  }
+
+  // Extract transactions from RBS (Royal Bank of Scotland) bank statements
+  private async extractRBSTransactions(text: string, buffer?: Buffer): Promise<Transaction[]> {
+    const transactions: Transaction[] = [];
+    const lines = text.split('\n');
+
+    console.log('Parsing RBS statement...');
+    console.log('=== RAW PDF TEXT EXTRACTION ===');
+    console.log(`Total lines: ${lines.length}`);
+    console.log('--- First 100 lines ---');
+    lines.slice(0, 100).forEach((line, idx) => {
+      console.log(`[${idx}] ${line}`);
+    });
+    console.log('--- End of first 100 lines ---');
+
+    // Try to get coordinate-based data for validation (if buffer is provided)
+    let coordinateTransactions: Transaction[] = [];
+    let pdfElements: any[] = [];
+    let amountColumnMinX = 0;
+
+    if (buffer) {
+      try {
+        console.log('🔍 Fetching coordinate-based data for validation...');
+        coordinateTransactions = await this.genericCoordinateParser.parseStatement(buffer, false);
+        console.log(`✓ Got ${coordinateTransactions.length} transactions from coordinate parser`);
+
+        // Get PDF text elements with coordinates
+        const pdfCoordinateExtractor = new (await import('./pdfCoordinateExtractor')).PDFCoordinateExtractor();
+        pdfElements = await pdfCoordinateExtractor.extractTextWithCoordinates(buffer);
+
+        // Find the "Paid out" column X position
+        for (const el of pdfElements) {
+          if (el.text.trim().toLowerCase() === 'paid out') {
+            amountColumnMinX = el.x;
+            console.log(`📍 Amount column starts at x=${amountColumnMinX.toFixed(1)}`);
+            break;
+          }
+        }
+      } catch (error) {
+        console.log('⚠️  Coordinate validation unavailable:', error);
+      }
+    }
+
+    // RBS date pattern: "DD Mon YYYY" (e.g., "18 Mar 2021")
+    const rbsDatePattern = /^(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})/i;
+
+    // Transaction type pattern (for lines without dates)
+    const transactionTypePattern = /^(DIRECT DEBIT|AUTOMATED PAY IN|CHARGES|STANDING ORDER|BANK GIRO|TRANSFER|ATM|CASH|DEBIT CARD|CREDIT)/i;
+
+    // Track if we're in the transaction section and current date
+    let inTransactionSection = false;
+    let currentDate = '';
+
+    // Parse line by line
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Start of transaction section
+      if (line.includes('DateTypeDescription') ||
+          (line.includes('Date') && line.includes('Type') && line.includes('Description')) ||
+          (line.includes('Paid in') && line.includes('Paid out') && line.includes('Balance'))) {
+        inTransactionSection = true;
+        console.log(`Found transaction section header at line ${i}`);
+        continue;
+      }
+
+      // Skip empty lines and headers/footers
+      if (!line ||
+          line.includes('BUSINESS CURRENT ACCOUNT') ||
+          line.includes('Account number:') ||
+          line.includes('Sort code:') ||
+          line.includes('BIC:') ||
+          line.includes('IBAN:') ||
+          line.includes('RBOSGB2L') ||
+          line.includes('Branch Details') ||
+          line.includes('Your current details') ||
+          line.includes('Period') ||
+          line.includes('Previous Balance') ||
+          line.includes('New Balance') ||
+          (line.includes('Paid out') && line.includes('Paid in')) ||
+          line.match(/^GB\d{2}\s*RBOS/) || // IBAN
+          line.match(/^\d{2}-\d{2}-\d{2}$/) || // Sort code alone like "16-00-39"
+          line.match(/^\d{8}$/)) { // Account number alone
+        continue;
+      }
+
+      if (!inTransactionSection) continue;
+
+      // Handle BROUGHT FORWARD
+      if (line.includes('BROUGHT FORWARD')) {
+        const broughtForwardMatch = line.match(/BROUGHT FORWARD.*?([-]?\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/i);
+        if (broughtForwardMatch) {
+          const balanceStr = broughtForwardMatch[1].replace(/,/g, '').replace('£', '');
+          const balance = parseFloat(balanceStr);
+
+          transactions.push({
+            date: currentDate || '',
+            description: 'BROUGHT FORWARD',
+            amount: 0,
+            balance,
+            type: 'brought_forward',
+          });
+
+          console.log(`✓ BROUGHT FORWARD | Opening Balance: £${balance}`);
+        }
+        continue;
+      }
+
+      // Check if line starts with a date
+      const dateMatch = line.match(rbsDatePattern);
+      if (dateMatch) {
+        currentDate = dateMatch[1];
+        console.log(`Found date: ${currentDate}`);
+      }
+
+      // Check if this line has a transaction type (with or without date)
+      // Also check in the line without date prefix (in case date is concatenated)
+      let lineToCheck = line.replace(rbsDatePattern, '').trim();
+      const transactionMatch = line.match(transactionTypePattern) || lineToCheck.match(transactionTypePattern);
+
+      if (transactionMatch) {
+        // This is a transaction line
+        let fullLine = line;
+
+        // Collect continuation lines until we find amounts
+        // Keep collecting until we hit another DATE or find numbers that look like amount+balance
+        let j = i + 1;
+        let foundBalance = false;
+        while (j < lines.length && j < i + 20) {  // Increased from 10 to 20 lines
+          const nextLine = lines[j].trim();
+
+          // Stop if we hit another date
+          if (nextLine.match(rbsDatePattern)) {
+            break;
+          }
+
+          // Stop if we hit header/footer
+          if (!nextLine ||
+              nextLine.includes('Account number:') ||
+              nextLine.includes('Sort code:') ||
+              nextLine.match(/^\d{2}-\d{2}-\d{2}$/)) {
+            break;
+          }
+
+          fullLine += ' ' + nextLine;
+          j++;
+
+          // If this line has balance (ends with a number, may have minus sign), mark as found
+          if (nextLine.match(/[-]?\d{1,3}(?:,\d{3})*\.\d{2}$/)) {
+            foundBalance = true;
+            break;
+          }
+        }
+
+        // Update i to skip processed lines
+        i = j - 1;
+
+        // Remove the date from the beginning if present
+        let lineWithoutDate = fullLine.replace(rbsDatePattern, '').trim();
+
+        // IMPORTANT: RBS statements can have MULTIPLE transactions concatenated on the same line
+        // Example: "DEBIT CARD ... 6.99 3,479.79 DEBIT CARD ... 0.79 3,479.00 DIRECT DEBIT ... 36.19 3,391.84"
+        // We need to split these by finding transaction type keywords
+        const transactionSegments: string[] = [];
+        const transactionTypeGlobal = /(DIRECT DEBIT|AUTOMATED PAY IN|CHARGES|STANDING ORDER|BANK GIRO|TRANSFER|ATM|CASH|DEBIT CARD TRANSACTION|CREDIT)/gi;
+
+        // Split by transaction types while keeping the delimiter
+        const parts = lineWithoutDate.split(transactionTypeGlobal);
+
+        // Reconstruct segments: parts are [text, type, text, type, text, ...]
+        for (let k = 0; k < parts.length; k++) {
+          if (k % 2 === 1) {
+            // This is a transaction type keyword
+            const type = parts[k];
+            const content = parts[k + 1] || '';
+            transactionSegments.push(type + ' ' + content);
+          }
+        }
+
+        // If we didn't find multiple segments, treat the whole line as one transaction
+        if (transactionSegments.length === 0) {
+          transactionSegments.push(lineWithoutDate);
+        }
+
+        console.log(`\n[RBS] Found ${transactionSegments.length} transaction segment(s) for date ${currentDate}`);
+
+        // Process each transaction segment separately
+        for (const segment of transactionSegments) {
+          // Extract amounts: Look for patterns like "360.00-61,657.74" or "24,904.06-61,282.34"
+          // RBS format is: Description [PaidIn][PaidOut]Balance
+          // The balance can be positive or negative
+
+          // First, try to find the balance (at the end, may be positive or negative)
+          const balanceMatch = segment.match(/([-]?)(\d{1,3}(?:,\d{3})*\.\d{2})$/);
+          if (!balanceMatch || !currentDate) continue;
+
+          const balanceSign = balanceMatch[1] === '-' ? -1 : 1;
+          const balance = balanceSign * parseFloat(balanceMatch[2].replace(/,/g, ''));
+
+          // Remove balance from line (with optional minus sign)
+          let lineWithoutBalance = segment.replace(/[-]?\d{1,3}(?:,\d{3})*\.\d{2}$/, '').trim();
+
+          // Extract the amount - RBS format has the amount right before the balance
+          // The challenge is amounts can be concatenated with account numbers
+          // E.g., "AMC PLC , 0000075425954.18" where 0000075425 is account and 954.18 is amount
+
+          let amount = 0;
+          let description = lineWithoutBalance;
+
+          console.log(`\n[RBS Amount Extraction] Current date: ${currentDate}`);
+          console.log(`[RBS Amount Extraction] Segment: "${segment}"`);
+          console.log(`[RBS Amount Extraction] Line without balance: "${lineWithoutBalance}"`);
+
+          // Try to find the amount - we'll collect all possible candidates
+          let amountCandidates: Array<{amount: number, description: string}> = [];
+
+        // Strategy 1: Look for properly formatted amount with comma (e.g., "1,369.92")
+        // BUT also check if it might be concatenated (look for digits before it)
+        const properAmountMatch = lineWithoutBalance.match(/(\d*)(\d{1,3}(?:,\d{3})+\.\d{2})$/);
+        if (properAmountMatch) {
+          const prefix = properAmountMatch[1]; // Digits before the comma-formatted number
+          const formattedAmount = properAmountMatch[2];
+
+          if (prefix && prefix.length > 0) {
+            // Amount is concatenated with account number (e.g., "00000754251,369.92")
+            // Try different split points
+            const fullNumber = prefix + formattedAmount.replace(/,/g, '');
+            const cents = fullNumber.slice(-2);
+            const wholePart = fullNumber.slice(0, -3); // Remove .XX
+
+            console.log(`[RBS] Comma amount with prefix: ${prefix}${formattedAmount}`);
+            for (let len = 2; len <= Math.min(6, wholePart.length); len++) {
+              const amountPart = wholePart.slice(-len) + '.' + cents;
+              const accountPart = wholePart.substring(0, wholePart.length - len);
+              const potentialAmount = parseFloat(amountPart);
+              const desc = lineWithoutBalance.substring(0, lineWithoutBalance.lastIndexOf(properAmountMatch[0])) + accountPart;
+              amountCandidates.push({amount: potentialAmount, description: desc.trim()});
+              console.log(`  → Candidate (len=${len}): £${potentialAmount}, Account: ${accountPart}`);
+            }
+          } else {
+            // Clean comma-formatted amount
+            const amt = parseFloat(formattedAmount.replace(/,/g, ''));
+            const desc = lineWithoutBalance.substring(0, lineWithoutBalance.lastIndexOf(formattedAmount)).trim();
+            amountCandidates.push({amount: amt, description: desc});
+            console.log(`[RBS] Clean comma amount: ${formattedAmount} → £${amt}`);
+          }
+        }
+
+        // Strategy 1b: Check for separated thousands digit (e.g., "1 ,369.92" or "1 ,717.00")
+        // This happens when PDF text extraction separates the first digit due to spacing
+        const separatedThousandsMatch = lineWithoutBalance.match(/(\d{1,2})\s+,(\d{3}\.\d{2})$/);
+        if (separatedThousandsMatch) {
+          const thousands = separatedThousandsMatch[1];
+          const rest = separatedThousandsMatch[2];
+          const amt = parseFloat(thousands + rest); // "1" + "369.92" = 1369.92
+          const desc = lineWithoutBalance.substring(0, lineWithoutBalance.indexOf(separatedThousandsMatch[0])).trim();
+          amountCandidates.push({amount: amt, description: desc});
+          console.log(`[RBS] Separated thousands: "${thousands} ,${rest}" → £${amt}`);
+        }
+
+        // Strategy 1c: Check for amounts where just the last digit of thousands is separated
+        // (e.g., "00000754251 ,369.92" where account runs into first part of thousands)
+        const partialSeparatedMatch = lineWithoutBalance.match(/(\d{6,})(\d{1,2})\s+,(\d{3}\.\d{2})$/);
+        if (partialSeparatedMatch) {
+          const accountNum = partialSeparatedMatch[1];
+          const partialThousands = partialSeparatedMatch[2];
+          const rest = partialSeparatedMatch[3];
+          const amt = parseFloat(partialThousands + rest); // "13" + "69.92" = 1369.92
+          const desc = lineWithoutBalance.substring(0, lineWithoutBalance.indexOf(accountNum)) + accountNum;
+          amountCandidates.push({amount: amt, description: desc.trim()});
+          console.log(`[RBS] Partial separated: Account ${accountNum}, Amount "${partialThousands} ,${rest}" → £${amt}`);
+        }
+
+        if (amountCandidates.length === 0) {
+          // Strategy 2: Amount without commas, possibly concatenated
+          const lastNumberMatch = lineWithoutBalance.match(/(\d+)\.(\d{2})$/);
+          if (lastNumberMatch) {
+            const fullNumber = lastNumberMatch[1];
+            const cents = lastNumberMatch[2];
+
+            if (fullNumber.length > 6) {
+              console.log(`[RBS] Extracting from concatenated number: ${fullNumber}.${cents}`);
+              for (let len = 2; len <= Math.min(6, fullNumber.length); len++) {
+                const potentialAmount = parseFloat(fullNumber.slice(-len) + '.' + cents);
+                const accountNumber = fullNumber.substring(0, fullNumber.length - len);
+                const desc = lineWithoutBalance.replace(fullNumber + '.' + cents, accountNumber).trim();
+                amountCandidates.push({amount: potentialAmount, description: desc});
+                console.log(`  → Candidate (len=${len}): £${potentialAmount}, Account: ${accountNumber}`);
+              }
+            } else {
+              const amt = parseFloat(fullNumber + '.' + cents);
+              const desc = lineWithoutBalance.replace(fullNumber + '.' + cents, '').trim();
+              amountCandidates.push({amount: amt, description: desc});
+            }
+          }
+        }
+
+        // Select the best candidate
+        // Strategy 1: Use coordinate-based validation to check which digits are in the amount column
+        if (amountColumnMinX > 0 && pdfElements.length > 0 && amountCandidates.length > 1) {
+          console.log(`\n  📊 COORDINATE ANALYSIS for balance ${balance}:`);
+          console.log(`  Amount column starts at x=${amountColumnMinX.toFixed(1)}`);
+
+          // Find elements on the current row (matching balance)
+          const balanceStr = Math.abs(balance).toFixed(2).replace(/[,\.]/g, '');
+
+          // Find all numeric elements near this transaction
+          const numericElements = pdfElements.filter(el => /^\d+$/.test(el.text.trim()));
+
+          // Find ALL text elements (not just numeric) that might contain parts of the amount
+          const allElements = pdfElements.filter(el => {
+            const elText = el.text.trim();
+            return elText.length > 0 && /\d/.test(elText); // Contains at least one digit
+          });
+
+          // Log all elements with their coordinates
+          console.log(`  All text elements containing numbers:`);
+          allElements.forEach(el => {
+            const distanceFromColumn = el.x - amountColumnMinX;
+            const inAmountColumn = el.x >= amountColumnMinX + 100 && el.x < amountColumnMinX + 150; // "Paid out" column is ~100-150 units after column header
+            console.log(`    "${el.text}" at x=${el.x.toFixed(1)} (distance: ${distanceFromColumn.toFixed(1)}) ${inAmountColumn ? '✓ IN AMOUNT COLUMN' : '(outside)'}`);
+          });
+
+          // Check each candidate to see if its amount string matches an element in the amount column
+          console.log(`\n  Checking ${amountCandidates.length} candidates:`);
+          for (const candidate of amountCandidates) {
+            const amountStr = candidate.amount.toFixed(2); // e.g., "753.64"
+            const amountStrWithComma = candidate.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); // e.g., "1,369.92"
+
+            console.log(`    Candidate: £${candidate.amount} (looking for "${amountStr}" or "${amountStrWithComma}")`);
+
+            // Look for an element that contains this exact amount string in the paid out column area
+            const matchingEl = allElements.find(el => {
+              const elText = el.text.trim();
+              const inPaidOutColumn = el.x >= amountColumnMinX + 100 && el.x < amountColumnMinX + 150;
+              return inPaidOutColumn && (elText === amountStr || elText === amountStrWithComma);
+            });
+
+            if (matchingEl) {
+              amount = candidate.amount;
+              description = candidate.description;
+              console.log(`    ✓ SELECTED: £${amount} (found "${matchingEl.text}" at x=${matchingEl.x.toFixed(1)})`);
+              break;
+            }
+          }
+        }
+
+        // Strategy 2: If coordinate validation didn't work, try balance-based validation
+        if (amount === 0 && coordinateTransactions.length > 0 && currentDate && balance) {
+          const coordMatch = coordinateTransactions.find(ct =>
+            ct.balance !== undefined && Math.abs(ct.balance - balance) < 0.01
+          );
+
+          if (coordMatch && coordMatch.amount > 0) {
+            const matchingCandidate = amountCandidates.find(c =>
+              Math.abs(c.amount - coordMatch.amount) < 0.01
+            );
+
+            if (matchingCandidate) {
+              amount = matchingCandidate.amount;
+              description = matchingCandidate.description;
+              console.log(`  ✓ Selected: £${amount} (validated by coordinate parser)`);
+            } else {
+              amount = coordMatch.amount;
+              console.log(`  ✓ Selected: £${amount} (from coordinate parser - no candidate match)`);
+            }
+          }
+        }
+
+        // Strategy 2: If no coordinate validation, use heuristic
+        if (amount === 0 && amountCandidates.length > 0) {
+          const scoredCandidates = amountCandidates
+            .filter(c => c.amount > 0 && c.amount < 100000)
+            .map(c => {
+              const wholePart = Math.floor(c.amount);
+              const digits = wholePart.toString().length;
+              let score = 0;
+
+              // Scoring: prefer 4-digit amounts, then 3-digit
+              if (digits === 4) score = 200;       // £1000-9999 (MOST LIKELY)
+              else if (digits === 3) score = 100;  // £100-999
+              else if (digits === 2) score = 50;   // £10-99
+              else if (digits === 5) score = 30;   // £10000-99999
+              else if (digits === 1) score = 10;   // £1-9
+
+              return { ...c, score, digits };
+            })
+            .sort((a, b) => b.score - a.score); // Highest score first
+
+          if (scoredCandidates.length > 0) {
+            const best = scoredCandidates[0];
+            amount = best.amount;
+            description = best.description;
+            console.log(`  ✓ Selected: £${amount} (${best.digits} digits, score: ${best.score})`);
+          }
+        }
+
+        if (!amount || amount === 0) continue;
+
+        // Clean up description but preserve reference/account numbers
+        // Only remove very long number sequences (8+ digits) that appear at the end
+        description = description.replace(/\s*,?\s*\d{8,}$/, '').trim();
+        description = description.replace(/,\s*$/, '').trim();
+
+        // Fix spacing issues where transaction type is concatenated with description
+        // E.g., "DIRECT DEBITTESCO" should be "DIRECT DEBIT TESCO"
+        description = description.replace(/^(DIRECT DEBIT)([A-Z])/, '$1 $2');
+        description = description.replace(/^(AUTOMATED PAY IN)([A-Z])/, '$1 $2');
+        description = description.replace(/^(CHARGES)([A-Z0-9])/, '$1 $2');
+        description = description.replace(/^(STANDING ORDER)([A-Z])/, '$1 $2');
+        description = description.replace(/^(BANK GIRO)([A-Z])/, '$1 $2');
+
+        // Determine type from transaction keywords BEFORE removing them
+        const lowerDesc = description.toLowerCase();
+        let type: 'credit' | 'debit' = 'debit';
+
+        if (lowerDesc.includes('automated pay in') ||
+            lowerDesc.includes('credit') ||
+            lowerDesc.includes('deposit') ||
+            lowerDesc.includes('transfer in') ||
+            lowerDesc.includes('pay in')) {
+          type = 'credit';
+        } else {
+          type = 'debit';
+        }
+
+        // Remove RBS transaction type prefixes from description
+        // These are redundant as they're already captured in the "type" field (credit/debit)
+        description = description.replace(/^DIRECT DEBIT\s*/i, '');
+        description = description.replace(/^AUTOMATED PAY IN\s*/i, '');
+        description = description.replace(/^CHARGES\s*/i, '');
+        description = description.replace(/^STANDING ORDER\s*/i, '');
+        description = description.replace(/^BANK GIRO\s*/i, '');
+        description = description.replace(/^TRANSFER\s*/i, '');
+        description = description.replace(/^ATM\s*/i, '');
+        description = description.replace(/^CASH\s*/i, '');
+        description = description.replace(/^DEBIT CARD\s*/i, '');
+
+        description = description.trim();
+
+        // Skip if description is empty or just whitespace
+        if (!description) continue;
+
+        const transaction = {
+          date: currentDate,
+          description,
+          amount,
+          balance,
+          type,
+        };
+
+        transactions.push(transaction);
+
+        console.log(`✓ ${currentDate} | ${type === 'credit' ? 'IN' : 'OUT'} | ${description} | £${amount.toFixed(2)} | Balance: £${balance.toFixed(2)}`);
+        console.log(`   [DEBUG] Transaction object:`, JSON.stringify(transaction, null, 2));
+        } // End of segment loop
+      } // End of transactionMatch if
+    } // End of main for loop
+
+    console.log(`Extracted ${transactions.length} RBS transactions`);
+    console.log('=== FINAL RBS TRANSACTIONS ===');
+    transactions.forEach((t, idx) => {
+      console.log(`[${idx}] Date: "${t.date}" | Description: "${t.description}" | Type: "${t.type}" | Amount: ${t.amount} | Balance: ${t.balance}`);
+    });
+    console.log('=== END RBS TRANSACTIONS ===');
     return transactions;
   }
 
