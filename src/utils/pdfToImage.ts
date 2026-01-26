@@ -128,8 +128,13 @@ export async function convertPDFToImagesWithPDFJS(
       throw new Error('Canvas package not installed. Please install with: npm install canvas');
     }
 
-    // Load PDF
-    const loadingTask = pdfjs.getDocument({ data: pdfBuffer });
+    // Configure PDF.js for Node.js environment
+    // Disable standard font warnings by setting options
+    const loadingTask = pdfjs.getDocument({
+      data: pdfBuffer,
+      standardFontDataUrl: undefined, // Disable standard font loading
+      disableFontFace: true, // Use built-in fonts only
+    });
     const pdf = await loadingTask.promise;
 
     const numPages = maxPages ? Math.min(maxPages, pdf.numPages) : pdf.numPages;
