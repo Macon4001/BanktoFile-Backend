@@ -1,6 +1,7 @@
 import Tesseract from 'tesseract.js';
 import { Transaction, ParsedStatement } from '../types/index.js';
 import { googleVisionOCRService, GoogleVisionConfig } from './googleVisionOCR.js';
+import { convertPDFToImagesAuto } from '../utils/pdfToImage.js';
 
 export type OCRProvider = 'tesseract' | 'google-vision' | 'auto';
 
@@ -114,23 +115,45 @@ export class OCRService {
       console.log('Starting Tesseract OCR...');
       const startTime = Date.now();
 
-      // Note: Tesseract.js can work with PDF buffers directly
-      const { data } = await Tesseract.recognize(pdfBuffer, 'eng', {
-        logger: (m) => {
-          if (m.status === 'recognizing text') {
-            console.log(`Tesseract Progress: ${Math.round(m.progress * 100)}%`);
-          }
-        },
-      });
+      // Convert PDF to images first (Tesseract cannot read PDF buffers)
+      console.log('Converting PDF to images for Tesseract...');
+      const images = await convertPDFToImagesAuto(pdfBuffer);
+      console.log(`Converted PDF to ${images.length} images`);
+
+      // Process each page image with Tesseract
+      const pageResults: Array<{ text: string; confidence: number }> = [];
+
+      for (let i = 0; i < images.length; i++) {
+        console.log(`Processing page ${i + 1}/${images.length} with Tesseract...`);
+
+        const { data } = await Tesseract.recognize(images[i], 'eng', {
+          logger: (m) => {
+            if (m.status === 'recognizing text') {
+              console.log(`  Page ${i + 1} Progress: ${Math.round(m.progress * 100)}%`);
+            }
+          },
+        });
+
+        pageResults.push({
+          text: data.text,
+          confidence: data.confidence,
+        });
+
+        console.log(`  Page ${i + 1} completed - Confidence: ${data.confidence.toFixed(1)}%`);
+      }
+
+      // Combine results from all pages
+      const combinedText = pageResults.map(r => r.text).join('\n\n');
+      const avgConfidence = pageResults.reduce((sum, r) => sum + r.confidence, 0) / pageResults.length;
 
       const endTime = Date.now();
-      console.log(`Tesseract completed in ${(endTime - startTime) / 1000}s`);
-      console.log(`Tesseract Confidence: ${data.confidence}%`);
-      console.log(`Extracted text length: ${data.text.length} characters`);
+      console.log(`Tesseract completed ${images.length} pages in ${(endTime - startTime) / 1000}s`);
+      console.log(`Average Confidence: ${avgConfidence.toFixed(1)}%`);
+      console.log(`Extracted text length: ${combinedText.length} characters`);
 
       return {
-        text: data.text,
-        confidence: data.confidence,
+        text: combinedText,
+        confidence: avgConfidence,
       };
     } catch (error) {
       console.error('Tesseract OCR error:', error);
