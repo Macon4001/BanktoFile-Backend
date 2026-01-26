@@ -98,17 +98,20 @@ app.use((_req: Request, res: Response) => {
   res.status(404).json({ error: "Route not found" });
 });
 
-// Initialize OCR service (optional - can be lazy-loaded on first use)
-// Comment this out if you want faster server startup
+// Initialize OCR service (Tesseract + Google Vision)
+// This enables automatic OCR fallback for scanned PDFs
 async function initializeServices() {
   try {
     console.log('🔧 Initializing OCR service...');
-    // await ocrService.initialize(2); // Initialize with 2 workers
-    // Disabled for now - OCR will be initialized on first use for faster startup
-    console.log('✅ OCR service ready (lazy initialization enabled)');
+
+    // Initialize with 2 Tesseract workers + Google Vision (if credentials provided)
+    await ocrService.initialize(2);
+
+    console.log('✅ OCR service initialized successfully');
   } catch (error) {
     console.error('⚠️  Failed to initialize OCR service:', error);
     console.error('OCR functionality may not work properly');
+    console.error('Tip: Ensure Tesseract is available or Google Vision credentials are configured');
   }
 }
 
