@@ -2,6 +2,7 @@ import Tesseract from 'tesseract.js';
 import { Transaction, ParsedStatement } from '../types/index.js';
 import { googleVisionOCRService, GoogleVisionConfig } from './googleVisionOCR.js';
 import { convertPDFToImagesAuto } from '../utils/pdfToImage.js';
+import { checkParsingAccuracy, logSanityCheckResult } from '../utils/parsingAccuracyCheck.js';
 
 export type OCRProvider = 'tesseract' | 'google-vision' | 'auto';
 
@@ -329,16 +330,63 @@ export class OCRService {
 
   /**
    * Full OCR pipeline: extract text and parse transactions
+   * Includes intelligent fallback - if Tesseract results are poor, tries Google Vision
    */
   async processScannedPDF(
     pdfBuffer: Buffer,
-    provider: OCRProvider = 'auto'
+    provider: OCRProvider = 'auto',
+    pageCount?: number
   ): Promise<ParsedStatement & { confidence: number; usedOCR: boolean; ocrProvider?: string; pageCount?: number }> {
     const ocrResult = await this.extractTextFromPDF(pdfBuffer, provider);
     const parsed = this.parseOCRText(ocrResult.text);
 
     // Log OCR usage for cost tracking
     this.logOCRUsage(ocrResult);
+
+    // If using auto mode with Tesseract, check if results pass sanity check
+    if (provider === 'auto' && ocrResult.provider === 'tesseract' && pageCount && pageCount > 0) {
+      console.log('🔍 Checking Tesseract OCR results with sanity check...');
+
+      const sanityCheck = checkParsingAccuracy({
+        pageCount: pageCount,
+        textLength: ocrResult.text.length,
+        transactions: parsed.transactions,
+      });
+
+      logSanityCheckResult(sanityCheck);
+
+      // If Tesseract results also fail sanity check, try Google Vision as final fallback
+      if (!sanityCheck.passed && googleVisionOCRService.isEnabled()) {
+        console.log('⚠️  Tesseract OCR results failed sanity check - trying Google Vision as final fallback...');
+
+        try {
+          const googleResult = await this.extractTextWithGoogleVision(pdfBuffer);
+          const googleParsed = this.parseOCRText(googleResult.text);
+
+          // Log Google Vision usage
+          this.logOCRUsage(googleResult);
+
+          console.log(`✅ Google Vision extracted ${googleParsed.transactions.length} transactions`);
+
+          // Use Google Vision results if better
+          if (googleParsed.transactions.length > parsed.transactions.length) {
+            console.log(`✅ Google Vision results are better (${googleParsed.transactions.length} vs ${parsed.transactions.length})`);
+            return {
+              ...googleParsed,
+              confidence: googleResult.confidence,
+              usedOCR: true,
+              ocrProvider: 'google-vision',
+              pageCount: googleResult.pageCount,
+            };
+          } else {
+            console.log(`⚠️  Google Vision didn't improve results, using Tesseract output`);
+          }
+        } catch (googleError) {
+          console.error('❌ Google Vision fallback failed:', googleError);
+          // Continue with Tesseract results
+        }
+      }
+    }
 
     return {
       ...parsed,

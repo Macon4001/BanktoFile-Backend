@@ -77,9 +77,9 @@ export class GenericCoordinateParser {
       reference: /^reference$/i,
       description: /^(description|details|transaction|particulars|transaction details)$/i,
       type: /^(type|dr\/cr|d\/c)$/i,
-      debit: /^(debit|out|money out|paid out)$/i,  // Match "Debit", "Out", "Money Out", etc.
-      credit: /^(credit|in|money in|paid in)$/i, // Match "Credit", "In", "Money In", etc.
-      amount: /^(amount|value)$/i,
+      debit: /^(debit|out|money out|paid out)(\s*\([£€$]\))?$/i,  // Match "Debit", "Debit (£)", "Out", "Money Out", etc.
+      credit: /^(credit|in|money in|paid in)(\s*\([£€$]\))?$/i, // Match "Credit", "Credit (£)", "In", "Money In", etc.
+      amount: /^(amount|value)(\s*\([£€$]\))?$/i,
       balance: /^balance/i,  // Match "Balance", "Balance (£)", etc.
     };
 
@@ -344,39 +344,85 @@ export class GenericCoordinateParser {
           const amountEl = amountCandidates[0];
           amount = this.parseAmount(amountEl.text);
 
-          // Check if in credit column boundaries (if detected)
+          // Check if in credit or debit column boundaries (if detected)
           if (columns.credit || columns.debit) {
             const isInCreditColumn = columns.credit &&
               amountEl.x >= columns.credit.min &&
               amountEl.x <= columns.credit.max;
 
-            type = isInCreditColumn ? "credit" : "debit";
-            typeDetected = true;
-            if (debug) console.log(`[DEBUG] Strategy 3a (single amount with column): x=${amountEl.x}, isInCreditColumn=${isInCreditColumn}, type=${type}`);
+            const isInDebitColumn = columns.debit &&
+              amountEl.x >= columns.debit.min &&
+              amountEl.x <= columns.debit.max;
+
+            if (isInCreditColumn) {
+              type = "credit";
+              typeDetected = true;
+              if (debug) console.log(`[DEBUG] Strategy 3a (single amount in credit column): x=${amountEl.x}, creditCol=[${columns.credit?.min}-${columns.credit?.max}], type=credit`);
+            } else if (isInDebitColumn) {
+              type = "debit";
+              typeDetected = true;
+              if (debug) console.log(`[DEBUG] Strategy 3a (single amount in debit column): x=${amountEl.x}, debitCol=[${columns.debit?.min}-${columns.debit?.max}], type=debit`);
+            } else {
+              // Amount is not clearly in either column - defer to balance comparison
+              if (debug) console.log(`[DEBUG] Strategy 3b (single amount, unclear column): x=${amountEl.x}, debitCol=[${columns.debit?.min}-${columns.debit?.max}], creditCol=[${columns.credit?.min}-${columns.credit?.max}], deferring to balance comparison`);
+            }
           } else {
             // No column headers detected - we'll use Strategy 4 (balance comparison) instead
             if (debug) console.log(`[DEBUG] Strategy 3b (single amount, no columns): x=${amountEl.x}, deferring to balance comparison`);
           }
         } else if (amountCandidates.length === 2) {
           // Two amounts found - likely separate Out/In columns
-          // The leftmost is typically "Out" (debit), rightmost is "In" (credit)
-          const sortedCandidates = amountCandidates.sort((a, b) => a.x - b.x);
-          const leftAmount = this.parseAmount(sortedCandidates[0].text);
-          const rightAmount = this.parseAmount(sortedCandidates[1].text);
+          // Check if they're in the debit/credit column boundaries
+          if (columns.debit && columns.credit) {
+            const debitAmount = amountCandidates.find(el =>
+              el.x >= columns.debit!.min && el.x <= columns.debit!.max
+            );
+            const creditAmount = amountCandidates.find(el =>
+              el.x >= columns.credit!.min && el.x <= columns.credit!.max
+            );
 
-          if (leftAmount > 0 && rightAmount === 0) {
-            amount = leftAmount;
-            type = "debit";
-            typeDetected = true;
-            if (debug) console.log(`[DEBUG] Strategy 3c (two amounts): left=${leftAmount} (debit), right=0`);
-          } else if (rightAmount > 0 && leftAmount === 0) {
-            amount = rightAmount;
-            type = "credit";
-            typeDetected = true;
-            if (debug) console.log(`[DEBUG] Strategy 3d (two amounts): left=0, right=${rightAmount} (credit)`);
-          } else if (leftAmount > 0 && rightAmount > 0) {
-            // Both have values - use balance comparison (Strategy 4) to determine which is correct
-            if (debug) console.log(`[DEBUG] Strategy 3e (two amounts both >0): deferring to balance comparison`);
+            const debitValue = debitAmount ? this.parseAmount(debitAmount.text) : 0;
+            const creditValue = creditAmount ? this.parseAmount(creditAmount.text) : 0;
+
+            if (debug) console.log(`[DEBUG] Strategy 3c (two amounts with columns): debit=${debitValue}, credit=${creditValue}`);
+
+            if (debitValue > 0 && creditValue === 0) {
+              amount = debitValue;
+              type = "debit";
+              typeDetected = true;
+              if (debug) console.log(`[DEBUG] Strategy 3c result: using debit amount`);
+            } else if (creditValue > 0 && debitValue === 0) {
+              amount = creditValue;
+              type = "credit";
+              typeDetected = true;
+              if (debug) console.log(`[DEBUG] Strategy 3c result: using credit amount`);
+            } else if (debitValue > 0 && creditValue > 0) {
+              // Both have values - this shouldn't happen normally, use balance comparison
+              if (debug) console.log(`[DEBUG] Strategy 3c: both columns have values, deferring to balance comparison`);
+            }
+          } else {
+            // No column headers detected - fall back to position-based logic
+            // The leftmost is typically "Out" (debit), rightmost is "In" (credit)
+            const sortedCandidates = amountCandidates.sort((a, b) => a.x - b.x);
+            const leftAmount = this.parseAmount(sortedCandidates[0].text);
+            const rightAmount = this.parseAmount(sortedCandidates[1].text);
+
+            if (debug) console.log(`[DEBUG] Strategy 3d (two amounts by position): left=${leftAmount}, right=${rightAmount}`);
+
+            if (leftAmount > 0 && rightAmount === 0) {
+              amount = leftAmount;
+              type = "debit";
+              typeDetected = true;
+              if (debug) console.log(`[DEBUG] Strategy 3d result: left amount is debit`);
+            } else if (rightAmount > 0 && leftAmount === 0) {
+              amount = rightAmount;
+              type = "credit";
+              typeDetected = true;
+              if (debug) console.log(`[DEBUG] Strategy 3d result: right amount is credit`);
+            } else if (leftAmount > 0 && rightAmount > 0) {
+              // Both have values - use balance comparison (Strategy 4) to determine which is correct
+              if (debug) console.log(`[DEBUG] Strategy 3d: both amounts >0, deferring to balance comparison`);
+            }
           }
         }
       }

@@ -58,15 +58,36 @@ export class UploadController {
 
           try {
             // Try OCR with automatic provider selection (Tesseract first, Google Vision fallback)
+            // Pass page count for sanity checking (extract from pdfResult's internal data if available)
             console.log("🔍 OCR Fallback triggered");
-            const ocrResult = await ocrService.processScannedPDF(file.buffer, 'auto');
+
+            // Get page count from PDF (try to extract it again if needed)
+            let pageCount: number | undefined;
+            try {
+              const pdfParse = await import('pdf-parse');
+              const pdfData = await (pdfParse as any).default(file.buffer);
+              pageCount = pdfData.numpages;
+            } catch {
+              // If extraction fails, we'll pass undefined and skip sanity check in OCR
+              pageCount = undefined;
+            }
+
+            const ocrResult = await ocrService.processScannedPDF(file.buffer, 'auto', pageCount);
 
             console.log(`✅ OCR extracted ${ocrResult.transactions.length} transactions using ${ocrResult.ocrProvider}`);
 
-            parsedData = {
-              ...pdfResult,
-              ...ocrResult,
-            };
+            // Check if OCR results are actually better than original parsing
+            const ocrImproved = ocrResult.transactions.length > pdfResult.transactions.length;
+
+            if (!ocrImproved && pdfResult.transactions.length > 0) {
+              console.log(`⚠️  OCR didn't improve results (${ocrResult.transactions.length} vs ${pdfResult.transactions.length}), using original parsing`);
+              parsedData = pdfResult;
+            } else {
+              parsedData = {
+                ...pdfResult,
+                ...ocrResult,
+              };
+            }
           } catch (ocrError: unknown) {
             const err = ocrError as Error;
             console.error("❌ OCR fallback failed:", err.message);

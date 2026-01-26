@@ -40,7 +40,13 @@ export class PDFCoordinateExtractor {
     try {
       // Load the PDF document
       const data = new Uint8Array(buffer);
-      const loadingTask = pdfjsLib.getDocument({ data });
+      const loadingTask = pdfjsLib.getDocument({
+        data,
+        // Disable font face to avoid loading issues in Node.js
+        // Text extraction doesn't require font rendering
+        useSystemFonts: false,
+        disableFontFace: true,
+      });
       const pdfDocument = await loadingTask.promise;
 
       console.log(`[PDF Coordinate Extractor] Loaded PDF with ${pdfDocument.numPages} pages`);
