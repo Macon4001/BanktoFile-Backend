@@ -48,9 +48,13 @@ export class UploadController {
         const pdfResult = await this.pdfParser.parsePDF(file.buffer);
         rawContent = pdfResult.rawText || "";
 
-        // Check if OCR is needed (scanned PDF or no transactions found)
+        // Check if OCR is needed (scanned PDF, no transactions found, or sanity check failed)
         if (pdfResult.needsOCR) {
-          console.log("⚠️  Standard PDF parsing found no transactions - trying OCR fallback");
+          if (pdfResult.transactions && pdfResult.transactions.length > 0) {
+            console.log("⚠️  Sanity check failed - parsing may be inaccurate, triggering OCR fallback");
+          } else {
+            console.log("⚠️  Standard PDF parsing found no transactions - trying OCR fallback");
+          }
 
           try {
             // Try OCR with automatic provider selection (Tesseract first, Google Vision fallback)

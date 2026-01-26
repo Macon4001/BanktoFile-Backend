@@ -4,6 +4,7 @@ import { MetroBankCoordinateParser } from "./metroBankCoordinateParser.js";
 import { GenericCoordinateParser } from "./genericCoordinateParser.js";
 import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
 import { bankDetectionService, BankDetectionResult } from "./bankDetectionService.js";
+import { checkParsingAccuracy, logSanityCheckResult } from "../utils/parsingAccuracyCheck.js";
 
 /**
  * Internal metadata to track where a transaction was parsed from
@@ -165,9 +166,21 @@ export class PDFParser {
         }
       }
 
-      // If still no transactions found despite having text, might need OCR
-      const needsOCR = transactions.length === 0 && text.length > 0;
-      if (needsOCR) {
+      // Run sanity check to detect inaccurate parsing
+      const sanityCheck = checkParsingAccuracy({
+        pageCount: data.numpages || 1,
+        textLength: text.length,
+        transactions,
+      });
+
+      logSanityCheckResult(sanityCheck);
+
+      // Trigger OCR if:
+      // 1. No transactions found despite having text, OR
+      // 2. Sanity check failed (likely inaccurate parsing)
+      const needsOCR = (transactions.length === 0 && text.length > 0) || !sanityCheck.passed;
+
+      if (needsOCR && transactions.length === 0) {
         console.log("⚠️  No transactions found - might need OCR fallback");
       }
 
