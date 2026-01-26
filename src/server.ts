@@ -29,9 +29,26 @@ const __dirname = path.dirname(__filename);
 const app: Express = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
+// Middleware - CORS configuration
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://www.banktofile.com',
+  'https://banktofile.com',
+  process.env.FRONTEND_URL,
+].filter(Boolean).map(url => url?.replace(/\/$/, '')); // Remove trailing slashes
+
 app.use(cors({
-  origin: (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/$/, ''), // Remove trailing slash
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps, Postman, etc.)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log('⚠️  CORS blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   optionsSuccessStatus: 200,
   exposedHeaders: ['Content-Type', 'Content-Length'],

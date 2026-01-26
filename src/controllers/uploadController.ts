@@ -67,9 +67,22 @@ export class UploadController {
               ...pdfResult,
               ...ocrResult,
             };
-          } catch (ocrError) {
-            console.error("❌ OCR fallback failed:", ocrError);
-            // Return original result if OCR fails
+          } catch (ocrError: unknown) {
+            const err = ocrError as Error;
+            console.error("❌ OCR fallback failed:", err.message);
+            console.error("Full error:", err);
+
+            // If still no transactions, return helpful error to user
+            if (pdfResult.transactions.length === 0) {
+              console.log("ERROR: OCR failed and no transactions found - returning error to user");
+              res.status(400).json({
+                error: "Unable to extract transactions from this PDF. The file may be scanned or image-based, and OCR processing is not available. Please try a different file format or contact support.",
+                details: "OCR_NOT_AVAILABLE"
+              });
+              return;
+            }
+
+            // If we have some transactions from standard parsing, return those with a warning
             parsedData = pdfResult;
           }
         } else {
