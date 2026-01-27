@@ -243,25 +243,46 @@ export async function convertPDFToImagesWithPDFJS(
     }
 
     // Configure font paths - use local node_modules instead of CDN
-    // Get the current file's directory path
-    // Use process.cwd() as a fallback for determining paths
-    const currentDir = process.cwd();
-    const __dirname = path.join(currentDir, 'src', 'utils');
+    // Try to find pdfjs-dist package location (works in both dev and production)
+    let standardFontDataUrl: string | undefined;
+    let cMapUrl: string | undefined;
 
-    // Build absolute paths to pdfjs-dist assets
-    const pdfjsPath = path.resolve(__dirname, '../../node_modules/pdfjs-dist');
-    const standardFontDataUrl = `file://${path.join(pdfjsPath, 'standard_fonts')}/`;
-    const cMapUrl = `file://${path.join(pdfjsPath, 'cmaps')}/`;
+    try {
+      // Use require.resolve to find the actual location of pdfjs-dist
+      // This works whether we're in src/ (dev) or dist/ (production)
+      const pdfjsPackageJson = require.resolve('pdfjs-dist/package.json');
+      const pdfjsPath = path.dirname(pdfjsPackageJson);
+
+      const standardFontsPath = path.join(pdfjsPath, 'standard_fonts');
+      const cMapsPath = path.join(pdfjsPath, 'cmaps');
+
+      // Check if paths exist before using them
+      if (fs.existsSync(standardFontsPath)) {
+        standardFontDataUrl = `file://${standardFontsPath}/`;
+        console.log(`✅ Found pdfjs standard fonts at: ${standardFontsPath}`);
+      } else {
+        console.warn('⚠️  pdfjs standard_fonts directory not found');
+      }
+
+      if (fs.existsSync(cMapsPath)) {
+        cMapUrl = `file://${cMapsPath}/`;
+        console.log(`✅ Found pdfjs cmaps at: ${cMapsPath}`);
+      } else {
+        console.warn('⚠️  pdfjs cmaps directory not found');
+      }
+    } catch (error) {
+      console.warn('⚠️  Could not locate pdfjs-dist assets:', error);
+      // Continue without font URLs - PDF.js will work but may not render all fonts perfectly
+    }
 
     const loadingTask = pdfjs.getDocument({
       data: uint8Array,
       // Enable font rendering for proper text display
       disableFontFace: false,
-      // Use standard fonts from local pdfjs-dist package
-      standardFontDataUrl: standardFontDataUrl,
-      // Enable CMap for character mapping (needed for Unicode)
-      cMapUrl: cMapUrl,
-      cMapPacked: true,
+      // Use standard fonts from local pdfjs-dist package (if available)
+      ...(standardFontDataUrl && { standardFontDataUrl }),
+      // Enable CMap for character mapping (needed for Unicode, if available)
+      ...(cMapUrl && { cMapUrl, cMapPacked: true }),
       // Ensure fonts are properly embedded
       useSystemFonts: true,
     });
