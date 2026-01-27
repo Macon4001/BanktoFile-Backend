@@ -3,12 +3,19 @@ import { Transaction, ParsedStatement } from '../types/index.js';
 import { googleVisionOCRService, GoogleVisionConfig } from './googleVisionOCR.js';
 import { convertPDFToImagesAuto } from '../utils/pdfToImage.js';
 import { checkParsingAccuracy, logSanityCheckResult } from '../utils/parsingAccuracyCheck.js';
+import { PDFParser } from './pdfParser.js';
 
 export type OCRProvider = 'tesseract' | 'google-vision' | 'auto';
 
 export class OCRService {
   private scheduler: Tesseract.Scheduler | null = null;
   private preferredProvider: OCRProvider = 'auto';
+  private pdfParser: PDFParser;
+
+  constructor() {
+    // Initialize PDF Parser for bank-specific parsing
+    this.pdfParser = new PDFParser();
+  }
 
   /**
    * Initialize OCR services (both Tesseract and Google Vision)
@@ -68,36 +75,34 @@ export class OCRService {
   ): Promise<{ text: string; confidence: number; provider: string; pageCount?: number }> {
     const effectiveProvider = provider === 'auto' ? this.preferredProvider : provider;
 
-    // Strategy: Try Tesseract first (free), fall back to Google Vision if needed
+    // Strategy: Skip Tesseract, use Google Vision directly if available (Tesseract quality is poor)
     if (effectiveProvider === 'auto') {
-      try {
-        console.log('🔍 Trying Tesseract OCR first...');
-        const result = await this.extractTextWithTesseract(pdfBuffer);
-
-        // If Tesseract worked well (good confidence and reasonable text length)
-        if (result.confidence > 60 && result.text.length > 100) {
-          console.log('✅ Tesseract OCR successful');
-          return { ...result, provider: 'tesseract' };
-        }
-
-        // If Tesseract had low confidence or poor results, try Google Vision
-        if (googleVisionOCRService.isEnabled()) {
-          console.log('⚠️  Tesseract confidence low, trying Google Vision...');
+      // Check if Google Vision is enabled first
+      if (googleVisionOCRService.isEnabled()) {
+        console.log('🔍 Using Google Vision OCR directly (Tesseract skipped for better quality)');
+        try {
           return await this.extractTextWithGoogleVision(pdfBuffer);
+        } catch (googleError) {
+          console.error('❌ Google Vision OCR failed:', googleError);
+          // Fall back to Tesseract as last resort
+          console.log('🔄 Falling back to Tesseract OCR as last resort...');
+          try {
+            const result = await this.extractTextWithTesseract(pdfBuffer);
+            return { ...result, provider: 'tesseract' };
+          } catch (tesseractError) {
+            console.error('❌ Tesseract also failed:', tesseractError);
+            throw new Error('All OCR providers failed');
+          }
         }
+      }
 
-        // No fallback available, return Tesseract result
-        console.log('⚠️  Tesseract confidence low but no fallback available');
+      // No Google Vision, try Tesseract
+      try {
+        console.log('🔍 Google Vision not available, trying Tesseract...');
+        const result = await this.extractTextWithTesseract(pdfBuffer);
         return { ...result, provider: 'tesseract' };
       } catch (tesseractError) {
         console.error('Tesseract OCR failed:', tesseractError);
-
-        // Try Google Vision as fallback
-        if (googleVisionOCRService.isEnabled()) {
-          console.log('🔄 Falling back to Google Vision OCR...');
-          return await this.extractTextWithGoogleVision(pdfBuffer);
-        }
-
         throw tesseractError;
       }
     } else if (effectiveProvider === 'google-vision') {
@@ -188,21 +193,18 @@ export class OCRService {
 
   /**
    * Process OCR text and extract transactions
-   * Uses the same parsing logic as PDFParser
+   * Uses bank-specific parsers from PDFParser for accurate parsing
    */
-  parseOCRText(text: string): ParsedStatement {
+  async parseOCRText(text: string): Promise<ParsedStatement> {
     console.log('Parsing OCR text for transactions...');
 
     // Clean up common OCR errors
     const cleanedText = this.cleanOCRText(text);
 
-    const transactions = this.extractTransactions(cleanedText);
-    const metadata = this.extractMetadata(cleanedText);
+    // Use PDFParser's bank-specific parsing logic (RBS, Barclays, Monzo, etc.)
+    const parsed = await this.pdfParser.parseOCRText(cleanedText);
 
-    return {
-      transactions,
-      metadata,
-    };
+    return parsed;
   }
 
   /**
@@ -338,7 +340,7 @@ export class OCRService {
     pageCount?: number
   ): Promise<ParsedStatement & { confidence: number; usedOCR: boolean; ocrProvider?: string; pageCount?: number }> {
     const ocrResult = await this.extractTextFromPDF(pdfBuffer, provider);
-    const parsed = this.parseOCRText(ocrResult.text);
+    const parsed = await this.parseOCRText(ocrResult.text);
 
     // Log OCR usage for cost tracking
     this.logOCRUsage(ocrResult);
@@ -361,7 +363,7 @@ export class OCRService {
 
         try {
           const googleResult = await this.extractTextWithGoogleVision(pdfBuffer);
-          const googleParsed = this.parseOCRText(googleResult.text);
+          const googleParsed = await this.parseOCRText(googleResult.text);
 
           // Log Google Vision usage
           this.logOCRUsage(googleResult);

@@ -1,0 +1,18 @@
+# Nixpacks configuration for Railway deployment
+# This ensures system dependencies are installed for OCR functionality
+
+[phases.setup]
+# Install system dependencies required for OCR
+nixPkgs = ["poppler_utils", "tesseract"]
+
+[phases.install]
+# Install Node.js dependencies
+cmds = ["npm install"]
+
+[phases.build]
+# Build TypeScript
+cmds = ["npm run build"]
+
+[start]
+# Start the application
+cmd = "npm start"

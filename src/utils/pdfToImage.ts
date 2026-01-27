@@ -121,17 +121,26 @@ export async function convertPDFToImagesWithPDFJS(
     const pdfjs = await import('pdfjs-dist');
     let createCanvas: typeof import('canvas').createCanvas;
 
+    let canvasModule: any;
     try {
-      const canvasModule = await import('canvas');
+      canvasModule = await import('canvas');
       createCanvas = canvasModule.createCanvas;
     } catch {
       throw new Error('Canvas package not installed. Please install with: npm install canvas');
     }
 
     // Configure PDF.js for Node.js environment
-    // Disable standard font warnings by setting options
+    // Convert Buffer to Uint8Array (PDF.js requirement)
+    const uint8Array = new Uint8Array(pdfBuffer);
+
+    // Set up Image for canvas - this fixes the "Image or Canvas expected" error
+    // PDF.js needs a global Image constructor for rendering inline images
+    if (typeof (globalThis as any).Image === 'undefined') {
+      (globalThis as any).Image = canvasModule.Image;
+    }
+
     const loadingTask = pdfjs.getDocument({
-      data: pdfBuffer,
+      data: uint8Array,
       standardFontDataUrl: undefined, // Disable standard font loading
       disableFontFace: true, // Use built-in fonts only
     });
@@ -152,7 +161,6 @@ export async function convertPDFToImagesWithPDFJS(
       await page.render({
         canvasContext: context,
         viewport: viewport,
-        canvas: canvas,
       } as never).promise;
 
       // Convert canvas to buffer

@@ -20,6 +20,7 @@ import supportRoutes from "./routes/support.js";
 import dashboardRoutes from "./routes/dashboard.js";
 import usersRoutes from "./routes/users.js";
 import ipUsageRoutes from "./routes/ipUsage.js";
+import manualExtractRoutes from "./routes/manualExtract.js";
 import { ocrService } from "./services/ocrService.js";
 
 // Get __dirname equivalent in ES modules
@@ -89,6 +90,7 @@ app.get("/health", (_req: Request, res: Response) => {
 app.use("/api/auth", authRoutes);
 app.use("/api", uploadRoutes);
 app.use("/api", ipUsageRoutes);
+app.use("/api", manualExtractRoutes);
 app.use("/api/stripe", stripeRoutes);
 app.use("/api/blog", blogRoutes);
 app.use("/api/contact", contactRoutes);

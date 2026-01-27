@@ -240,6 +240,22 @@ export class PDFParser {
     return false;
   }
 
+  /**
+   * Public method to parse OCR text using bank-specific parsers
+   * This allows OCR service to reuse all the sophisticated bank detection and parsing logic
+   */
+  async parseOCRText(text: string): Promise<ParsedStatement> {
+    console.log('📝 Parsing OCR text with bank-specific parsers...');
+
+    const transactions = await this.extractTransactions(text, undefined);
+    const metadata = this.extractMetadata(text);
+
+    return {
+      transactions,
+      metadata,
+    };
+  }
+
   private async extractTransactions(text: string, buffer?: Buffer): Promise<Transaction[]> {
     const transactions: Transaction[] = [];
     const lines = text.split("\n");
@@ -1243,6 +1259,217 @@ export class PDFParser {
     return transactions;
   }
 
+  /**
+   * Detect if RBS statement is in columnar format (typical of OCR text)
+   * In columnar format, dates, types, and descriptions are on separate consecutive lines
+   */
+  private detectRBSColumnarFormat(lines: string[]): boolean {
+    // Look for patterns that indicate columnar format:
+    // 1. Multiple consecutive lines with only dates
+    // 2. Multiple consecutive lines with only transaction types (DEBIT CARD, DIRECT DEBIT, etc.)
+    // 3. Amounts appearing separately from descriptions
+
+    let consecutiveDateLines = 0;
+    let consecutiveTypeLines = 0;
+    const datePattern = /^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}$/i;
+    const typePattern = /^(DEBIT CARD|DIRECT DEBIT|TRANSACTION|AUTOMATED PAY IN|STANDING ORDER|BANK GIRO|TRANSFER|ATM|CASH|CREDIT)$/i;
+
+    for (let i = 0; i < Math.min(200, lines.length); i++) {
+      const line = lines[i].trim();
+
+      if (datePattern.test(line)) {
+        consecutiveDateLines++;
+        if (consecutiveDateLines >= 3) {
+          console.log(`[RBS Columnar Detection] Found ${consecutiveDateLines} consecutive date lines - columnar format detected`);
+          return true;
+        }
+      } else {
+        consecutiveDateLines = 0;
+      }
+
+      if (typePattern.test(line)) {
+        consecutiveTypeLines++;
+        if (consecutiveTypeLines >= 5) {
+          console.log(`[RBS Columnar Detection] Found ${consecutiveTypeLines} consecutive type lines - columnar format detected`);
+          return true;
+        }
+      } else {
+        consecutiveTypeLines = 0;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Extract RBS transactions from columnar format (OCR text)
+   * In this format: Date | Type | Description | Paid in | Paid out | Balance
+   * Each field appears on separate lines in the text
+   */
+  private extractRBSTransactionsColumnar(lines: string[]): Transaction[] {
+    const transactions: Transaction[] = [];
+
+    console.log('📊 Parsing RBS columnar format...');
+
+    // First, find the table header to understand the structure
+    // In columnar format, "Paid in", "Paid out", and "Balance" might be on separate lines
+    let tableStartIndex = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim().toLowerCase();
+      // Look for "Description" as a more reliable indicator
+      if (line === 'description' && i > 30) {
+        tableStartIndex = i;
+        console.log(`Found 'Description' header at line ${i} - starting columnar parsing`);
+        break;
+      }
+      // Fallback: look for "Paid in" or "Paid out"
+      if ((line === 'paid in' || line === 'paid out') && i > 50 && tableStartIndex === -1) {
+        tableStartIndex = Math.max(0, i - 10);
+        console.log(`Found amounts header region around line ${i} (starting from ${tableStartIndex})`);
+        break;
+      }
+    }
+
+    if (tableStartIndex === -1) {
+      console.log('⚠️ Could not find table header in columnar format');
+      return transactions;
+    }
+
+    // RBS date pattern
+    const datePattern = /^\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}$/i;
+    const typePattern = /^(DEBIT CARD|DIRECT DEBIT|TRANSACTION|AUTOMATED PAY IN|STANDING ORDER|BANK GIRO|TRANSFER|ATM|CASH|CREDIT)$/i;
+    const amountPattern = /^\d{1,3}(?:,\d{3})*\.\d{2}$/;
+
+    // Collect dates, types, descriptions, and amounts
+    const dates: string[] = [];
+    const types: string[] = [];
+    const descriptions: string[] = [];
+    const amounts: string[] = [];
+
+    let currentSection: 'dates' | 'types' | 'descriptions' | 'amounts' | null = null;
+    let descriptionBuffer: string[] = [];
+
+    for (let i = tableStartIndex + 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Skip empty lines and headers
+      if (!line ||
+          line.includes('Account number:') ||
+          line.includes('Sort code:') ||
+          line.includes('Statement') ||
+          line.match(/^\d{2}-\d{2}-\d{2}$/) ||
+          line.match(/^GB\d{2}\s*RBOS/)) {
+        continue;
+      }
+
+      // Handle BROUGHT FORWARD
+      if (line.includes('BROUGHT FORWARD')) {
+        // Look for the balance in the next few lines
+        for (let j = i; j < Math.min(i + 5, lines.length); j++) {
+          const balanceMatch = lines[j].trim().match(/^(\d{1,3}(?:,\d{3})*\.\d{2})$/);
+          if (balanceMatch) {
+            const balance = parseFloat(balanceMatch[1].replace(/,/g, ''));
+            transactions.push({
+              date: '',
+              description: 'BROUGHT FORWARD',
+              amount: 0,
+              balance,
+              type: 'brought_forward',
+            });
+            console.log(`✓ BROUGHT FORWARD | Opening Balance: £${balance}`);
+            break;
+          }
+        }
+        continue;
+      }
+
+      // Detect what this line is
+      if (datePattern.test(line)) {
+        dates.push(line);
+        currentSection = 'dates';
+      } else if (typePattern.test(line)) {
+        types.push(line);
+        currentSection = 'types';
+        // When we see a type, flush any accumulated description
+        if (descriptionBuffer.length > 0) {
+          descriptions.push(descriptionBuffer.join(' '));
+          descriptionBuffer = [];
+        }
+      } else if (amountPattern.test(line)) {
+        amounts.push(line);
+        currentSection = 'amounts';
+      } else {
+        // This is likely part of a description
+        if (currentSection === 'types' || currentSection === 'descriptions') {
+          descriptionBuffer.push(line);
+          currentSection = 'descriptions';
+        }
+      }
+    }
+
+    // Flush any remaining description
+    if (descriptionBuffer.length > 0) {
+      descriptions.push(descriptionBuffer.join(' '));
+    }
+
+    console.log(`[Columnar] Found ${dates.length} dates, ${types.length} types, ${descriptions.length} descriptions, ${amounts.length} amounts`);
+
+    // The actual format after analyzing the text:
+    // - Descriptions contain the full transaction details
+    // - Each description is followed by 2 amounts: [paid_out] [balance]
+    // - We should match: description + next_2_amounts = 1 transaction
+    //
+    // Since types don't align well (too many), we'll match descriptions with amounts directly
+
+    let descIndex = 0;
+    let amountIndex = 0;
+    let currentDateIndex = 0;
+
+    // Group descriptions with their amounts
+    while (descIndex < descriptions.length && amountIndex < amounts.length - 1) {
+      const description = descriptions[descIndex];
+
+      // Skip header noise in descriptions
+      if (description.toLowerCase().includes('paid in') ||
+          description.toLowerCase().includes('paid out') ||
+          description.toLowerCase().includes('balance') ||
+          description.toLowerCase() === 'description') {
+        descIndex++;
+        continue;
+      }
+
+      // Get the next 2 amounts (paid_out and balance)
+      const paidOut = parseFloat(amounts[amountIndex].replace(/,/g, ''));
+      const balance = parseFloat(amounts[amountIndex + 1].replace(/,/g, ''));
+
+      // Determine which date to use - dates are sparse, so we increment date index
+      // whenever balance decreases significantly (indicates a new date group)
+      if (transactions.length > 0 && balance < transactions[transactions.length - 1].balance! - 100) {
+        currentDateIndex = Math.min(currentDateIndex + 1, dates.length - 1);
+      }
+
+      const date = currentDateIndex < dates.length ? dates[currentDateIndex] : dates[dates.length - 1] || '';
+
+      if (paidOut > 0 && !isNaN(balance)) {
+        transactions.push({
+          date,
+          description: description.trim(),
+          amount: paidOut,
+          balance,
+          type: 'debit',
+        });
+
+        console.log(`✓ ${date} | OUT | ${description.trim().substring(0, 60)}... | £${paidOut.toFixed(2)} | Balance: £${balance.toFixed(2)}`);
+      }
+
+      descIndex++;
+      amountIndex += 2; // Skip to next pair
+    }
+
+    console.log(`[Columnar] Extracted ${transactions.length} transactions`);
+    return transactions;
+  }
+
   // Extract transactions from RBS (Royal Bank of Scotland) bank statements
   private async extractRBSTransactions(text: string, buffer?: Buffer): Promise<Transaction[]> {
     const transactions: Transaction[] = [];
@@ -1256,6 +1483,15 @@ export class PDFParser {
       console.log(`[${idx}] ${line}`);
     });
     console.log('--- End of first 100 lines ---');
+
+    // Check if this is OCR text with columnar format where each field is on a separate line
+    // Pattern: Date lines followed by Type lines followed by Description lines followed by amounts
+    const hasColumnarFormat = this.detectRBSColumnarFormat(lines);
+
+    if (hasColumnarFormat) {
+      console.log('🔍 Detected RBS columnar format (OCR text) - using specialized parser');
+      return this.extractRBSTransactionsColumnar(lines);
+    }
 
     // Try to get coordinate-based data for validation (if buffer is provided)
     let coordinateTransactions: Transaction[] = [];
@@ -1434,15 +1670,22 @@ export class PDFParser {
           // RBS format is: Description [PaidIn][PaidOut]Balance
           // The balance can be positive or negative
 
+          if (!currentDate) continue;
+
           // First, try to find the balance (at the end, may be positive or negative)
+          // Balance is OPTIONAL - not all RBS transactions have it (especially foreign currency ones)
           const balanceMatch = segment.match(/([-]?)(\d{1,3}(?:,\d{3})*\.\d{2})$/);
-          if (!balanceMatch || !currentDate) continue;
+          let balance: number | undefined;
 
-          const balanceSign = balanceMatch[1] === '-' ? -1 : 1;
-          const balance = balanceSign * parseFloat(balanceMatch[2].replace(/,/g, ''));
+          if (balanceMatch) {
+            const balanceSign = balanceMatch[1] === '-' ? -1 : 1;
+            balance = balanceSign * parseFloat(balanceMatch[2].replace(/,/g, ''));
+          }
 
-          // Remove balance from line (with optional minus sign)
-          let lineWithoutBalance = segment.replace(/[-]?\d{1,3}(?:,\d{3})*\.\d{2}$/, '').trim();
+          // Remove balance from line if present (with optional minus sign)
+          let lineWithoutBalance = balanceMatch
+            ? segment.replace(/[-]?\d{1,3}(?:,\d{3})*\.\d{2}$/, '').trim()
+            : segment.trim();
 
           // Extract the amount - RBS format has the amount right before the balance
           // The challenge is amounts can be concatenated with account numbers
@@ -1541,7 +1784,7 @@ export class PDFParser {
 
         // Select the best candidate
         // Strategy 1: Use coordinate-based validation to check which digits are in the amount column
-        if (amountColumnMinX > 0 && pdfElements.length > 0 && amountCandidates.length > 1) {
+        if (amountColumnMinX > 0 && pdfElements.length > 0 && amountCandidates.length > 1 && balance !== undefined) {
           console.log(`\n  📊 COORDINATE ANALYSIS for balance ${balance}:`);
           console.log(`  Amount column starts at x=${amountColumnMinX.toFixed(1)}`);
 
@@ -1695,7 +1938,8 @@ export class PDFParser {
 
         transactions.push(transaction);
 
-        console.log(`✓ ${currentDate} | ${type === 'credit' ? 'IN' : 'OUT'} | ${description} | £${amount.toFixed(2)} | Balance: £${balance.toFixed(2)}`);
+        const balanceStr = balance !== undefined ? `£${balance.toFixed(2)}` : 'N/A';
+        console.log(`✓ ${currentDate} | ${type === 'credit' ? 'IN' : 'OUT'} | ${description} | £${amount.toFixed(2)} | Balance: ${balanceStr}`);
         console.log(`   [DEBUG] Transaction object:`, JSON.stringify(transaction, null, 2));
         } // End of segment loop
       } // End of transactionMatch if

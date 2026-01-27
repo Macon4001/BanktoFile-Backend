@@ -7,6 +7,8 @@ export interface Transaction {
   balanceMismatch?: boolean;
   expectedBalance?: number;
   isOpeningBalance?: boolean; // Mark opening balance / balance brought forward
+  amountIn?: number; // For manual extraction with separate in/out columns
+  amountOut?: number; // For manual extraction with separate in/out columns
 }
 
 export interface ParsedStatement {
