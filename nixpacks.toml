@@ -5,7 +5,8 @@
 # Install system dependencies required for OCR and PDF processing
 # poppler_utils provides pdftoppm for PDF to image conversion
 # tesseract provides OCR capabilities
-nixPkgs = ["poppler_utils", "tesseract", "ghostscript"]
+# cairo, pango, and other libs needed for canvas (optional dependency)
+nixPkgs = ["poppler_utils", "tesseract", "ghostscript", "cairo", "pango", "pkg-config", "pixman", "giflib", "libjpeg", "librsvg", "python3"]
 
 [phases.setup.nixOverlays]
 # Ensure poppler binaries are in PATH
@@ -13,9 +14,10 @@ nixpkgsArchive = "nixpkgs-unstable"
 
 [phases.install]
 # Verify poppler installation and install Node.js dependencies
+# Use npm ci for deterministic installs and skip scripts (husky prepare)
 cmds = [
   "which pdftoppm || echo 'WARNING: pdftoppm not found in PATH'",
-  "npm install"
+  "npm ci --ignore-scripts || npm install --ignore-scripts"
 ]
 
 [phases.build]
