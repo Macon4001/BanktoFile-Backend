@@ -120,13 +120,43 @@ export async function convertPDFToImagesWithPDFJS(
     // Dynamic import to avoid loading pdfjs-dist unless needed
     const pdfjs = await import('pdfjs-dist');
     let createCanvas: typeof import('canvas').createCanvas;
+    let registerFont: typeof import('canvas').registerFont;
 
-    let canvasModule: any;
+    let canvasModule: typeof import('canvas');
     try {
       canvasModule = await import('canvas');
       createCanvas = canvasModule.createCanvas;
+      registerFont = canvasModule.registerFont;
     } catch {
       throw new Error('Canvas package not installed. Please install with: npm install canvas');
+    }
+
+    // Register system fonts for better text rendering
+    // This helps prevent □□□ (missing glyph) characters
+    try {
+      if (process.platform === 'darwin') {
+        // macOS system fonts
+        registerFont('/System/Library/Fonts/Helvetica.ttc', { family: 'Helvetica' });
+        registerFont('/System/Library/Fonts/SFNSText.ttf', { family: 'SF Pro Text' });
+      } else if (process.platform === 'linux') {
+        // Linux system fonts (common locations)
+        try {
+          registerFont('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', { family: 'DejaVu Sans' });
+        } catch {
+          // Font not available, skip
+        }
+        try {
+          registerFont('/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf', { family: 'Liberation Sans' });
+        } catch {
+          // Font not available, skip
+        }
+      } else if (process.platform === 'win32') {
+        // Windows system fonts
+        registerFont('C:\\Windows\\Fonts\\arial.ttf', { family: 'Arial' });
+      }
+    } catch (fontError) {
+      console.warn('⚠️  Could not register system fonts:', fontError);
+      // Continue anyway - canvas will use default fonts
     }
 
     // Configure PDF.js for Node.js environment
@@ -135,16 +165,32 @@ export async function convertPDFToImagesWithPDFJS(
 
     // Set up Image for canvas - this fixes the "Image or Canvas expected" error
     // PDF.js needs a global Image constructor for rendering inline images
-    if (typeof (globalThis as any).Image === 'undefined') {
-      (globalThis as any).Image = canvasModule.Image;
+    if (typeof (globalThis as { Image?: unknown }).Image === 'undefined') {
+      (globalThis as unknown as { Image: typeof canvasModule.Image }).Image = canvasModule.Image;
     }
+
+    // Configure font paths - use local node_modules instead of CDN
+    // Get the current file's directory path
+    // Use process.cwd() as a fallback for determining paths
+    const currentDir = process.cwd();
+    const __dirname = path.join(currentDir, 'src', 'utils');
+
+    // Build absolute paths to pdfjs-dist assets
+    const pdfjsPath = path.resolve(__dirname, '../../node_modules/pdfjs-dist');
+    const standardFontDataUrl = `file://${path.join(pdfjsPath, 'standard_fonts')}/`;
+    const cMapUrl = `file://${path.join(pdfjsPath, 'cmaps')}/`;
 
     const loadingTask = pdfjs.getDocument({
       data: uint8Array,
       // Enable font rendering for proper text display
       disableFontFace: false,
-      // Use standard fonts from pdfjs-dist package
-      standardFontDataUrl: `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjs.version}/standard_fonts/`,
+      // Use standard fonts from local pdfjs-dist package
+      standardFontDataUrl: standardFontDataUrl,
+      // Enable CMap for character mapping (needed for Unicode)
+      cMapUrl: cMapUrl,
+      cMapPacked: true,
+      // Ensure fonts are properly embedded
+      useSystemFonts: true,
     });
     const pdf = await loadingTask.promise;
 
@@ -160,9 +206,16 @@ export async function convertPDFToImagesWithPDFJS(
       const canvas = createCanvas(viewport.width, viewport.height);
       const context = canvas.getContext('2d');
 
+      // Configure canvas context for better text rendering
+      context.imageSmoothingEnabled = true;
+      // Type assertion needed as imageSmoothingQuality is not in Node canvas types
+      (context as { imageSmoothingQuality?: string }).imageSmoothingQuality = 'high';
+
       await page.render({
         canvasContext: context,
         viewport: viewport,
+        // Enable text rendering improvements
+        intent: 'display',
       } as never).promise;
 
       // Convert canvas to buffer
