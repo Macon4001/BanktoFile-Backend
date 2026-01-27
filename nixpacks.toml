@@ -6,7 +6,8 @@
 # poppler_utils provides pdftoppm for PDF to image conversion
 # tesseract provides OCR capabilities
 # cairo, pango, and other libs needed for canvas (optional dependency)
-nixPkgs = ["poppler_utils", "tesseract", "ghostscript", "cairo", "pango", "pkg-config", "pixman", "giflib", "libjpeg", "librsvg", "python3"]
+# dejavu_fonts provides Unicode font support to prevent □□□ characters
+nixPkgs = ["poppler_utils", "tesseract", "ghostscript", "cairo", "pango", "pkg-config", "pixman", "giflib", "libjpeg", "librsvg", "python3", "dejavu_fonts", "liberation_ttf"]
 
 [phases.setup.nixOverlays]
 # Ensure poppler binaries are in PATH

@@ -136,23 +136,96 @@ export async function convertPDFToImagesWithPDFJS(
     try {
       if (process.platform === 'darwin') {
         // macOS system fonts
-        registerFont('/System/Library/Fonts/Helvetica.ttc', { family: 'Helvetica' });
-        registerFont('/System/Library/Fonts/SFNSText.ttf', { family: 'SF Pro Text' });
-      } else if (process.platform === 'linux') {
-        // Linux system fonts (common locations)
         try {
-          registerFont('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', { family: 'DejaVu Sans' });
+          registerFont('/System/Library/Fonts/Helvetica.ttc', { family: 'Helvetica' });
+          console.log('✅ Registered Helvetica font');
         } catch {
           // Font not available, skip
         }
         try {
-          registerFont('/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf', { family: 'Liberation Sans' });
+          registerFont('/System/Library/Fonts/SFNSText.ttf', { family: 'SF Pro Text' });
+          console.log('✅ Registered SF Pro Text font');
         } catch {
           // Font not available, skip
+        }
+      } else if (process.platform === 'linux') {
+        // Linux system fonts (multiple possible locations)
+        const linuxFontPaths = [
+          // Standard Linux paths
+          '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+          '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+          // Alternative Debian/Ubuntu paths
+          '/usr/share/fonts/dejavu/DejaVuSans.ttf',
+          '/usr/share/fonts/liberation/LiberationSans-Regular.ttf',
+        ];
+
+        let registeredCount = 0;
+
+        // Try standard paths first
+        for (const fontPath of linuxFontPaths) {
+          try {
+            if (fs.existsSync(fontPath)) {
+              const family = fontPath.includes('DejaVu') ? 'DejaVu Sans' : 'Liberation Sans';
+              registerFont(fontPath, { family });
+              console.log(`✅ Registered ${family} font from ${fontPath}`);
+              registeredCount++;
+            }
+          } catch {
+            // Font not available or registration failed, skip
+          }
+        }
+
+        // If no fonts found, search in /nix/store (NixOS/Railway environment)
+        if (registeredCount === 0) {
+          console.log('🔍 Searching for fonts in /nix/store...');
+          try {
+            if (fs.existsSync('/nix/store')) {
+              const nixStoreDirs = fs.readdirSync('/nix/store');
+
+              // Look for dejavu_fonts or liberation packages
+              for (const dir of nixStoreDirs) {
+                if (dir.includes('dejavu-fonts') || dir.includes('liberation-fonts')) {
+                  const possibleFontPaths = [
+                    `/nix/store/${dir}/share/fonts/truetype/DejaVuSans.ttf`,
+                    `/nix/store/${dir}/share/fonts/truetype/dejavu/DejaVuSans.ttf`,
+                    `/nix/store/${dir}/share/fonts/truetype/LiberationSans-Regular.ttf`,
+                    `/nix/store/${dir}/share/fonts/truetype/liberation/LiberationSans-Regular.ttf`,
+                  ];
+
+                  for (const fontPath of possibleFontPaths) {
+                    try {
+                      if (fs.existsSync(fontPath)) {
+                        const family = fontPath.includes('DejaVu') ? 'DejaVu Sans' : 'Liberation Sans';
+                        registerFont(fontPath, { family });
+                        console.log(`✅ Registered ${family} font from ${fontPath}`);
+                        registeredCount++;
+                      }
+                    } catch {
+                      // Font registration failed, skip
+                    }
+                  }
+                }
+              }
+            }
+          } catch (nixError) {
+            console.warn('⚠️  Could not search /nix/store:', nixError);
+          }
+        }
+
+        if (registeredCount === 0) {
+          console.warn('⚠️  No Linux fonts could be registered. Unicode characters may not display correctly.');
+          console.warn('    Ensure dejavu_fonts or liberation_ttf packages are installed.');
+        } else {
+          console.log(`✅ Successfully registered ${registeredCount} font(s)`);
         }
       } else if (process.platform === 'win32') {
         // Windows system fonts
-        registerFont('C:\\Windows\\Fonts\\arial.ttf', { family: 'Arial' });
+        try {
+          registerFont('C:\\Windows\\Fonts\\arial.ttf', { family: 'Arial' });
+          console.log('✅ Registered Arial font');
+        } catch {
+          // Font not available, skip
+        }
       }
     } catch (fontError) {
       console.warn('⚠️  Could not register system fonts:', fontError);
