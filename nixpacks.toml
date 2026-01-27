@@ -2,12 +2,21 @@
 # This ensures system dependencies are installed for OCR functionality
 
 [phases.setup]
-# Install system dependencies required for OCR
-nixPkgs = ["poppler_utils", "tesseract"]
+# Install system dependencies required for OCR and PDF processing
+# poppler_utils provides pdftoppm for PDF to image conversion
+# tesseract provides OCR capabilities
+nixPkgs = ["poppler_utils", "tesseract", "ghostscript"]
+
+[phases.setup.nixOverlays]
+# Ensure poppler binaries are in PATH
+nixpkgsArchive = "nixpkgs-unstable"
 
 [phases.install]
-# Install Node.js dependencies
-cmds = ["npm install"]
+# Verify poppler installation and install Node.js dependencies
+cmds = [
+  "which pdftoppm || echo 'WARNING: pdftoppm not found in PATH'",
+  "npm install"
+]
 
 [phases.build]
 # Build TypeScript
