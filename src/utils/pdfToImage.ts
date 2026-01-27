@@ -141,8 +141,10 @@ export async function convertPDFToImagesWithPDFJS(
 
     const loadingTask = pdfjs.getDocument({
       data: uint8Array,
-      standardFontDataUrl: undefined, // Disable standard font loading
-      disableFontFace: true, // Use built-in fonts only
+      // Enable font rendering for proper text display
+      disableFontFace: false,
+      // Use standard fonts from pdfjs-dist package
+      standardFontDataUrl: `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjs.version}/standard_fonts/`,
     });
     const pdf = await loadingTask.promise;
 
