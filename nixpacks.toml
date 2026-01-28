@@ -17,7 +17,9 @@ nixpkgsArchive = "nixpkgs-unstable"
 # Verify poppler installation and install Node.js dependencies
 # Use npm ci for deterministic installs and skip scripts (husky prepare)
 cmds = [
-  "which pdftoppm || echo 'WARNING: pdftoppm not found in PATH'",
+  "echo 'Checking for pdftoppm...'",
+  "which pdftoppm || find /nix/store -name pdftoppm 2>/dev/null | head -n 1",
+  "pdftoppm -v || echo 'WARNING: pdftoppm not executable'",
   "npm ci --ignore-scripts || npm install --ignore-scripts"
 ]
 
