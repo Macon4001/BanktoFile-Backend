@@ -117,19 +117,25 @@ export async function convertPDFToImagesWithPDFJS(
   const { dpi = 300, maxPages } = options;
 
   try {
-    // Dynamic import to avoid loading pdfjs-dist unless needed
-    const pdfjs = await import('pdfjs-dist');
-    let createCanvas: typeof import('canvas').createCanvas;
-    let registerFont: typeof import('canvas').registerFont;
-
+    // Import canvas module first
     let canvasModule: typeof import('canvas');
     try {
       canvasModule = await import('canvas');
-      createCanvas = canvasModule.createCanvas;
-      registerFont = canvasModule.registerFont;
     } catch {
       throw new Error('Canvas package not installed. Please install with: npm install canvas');
     }
+
+    const { createCanvas, registerFont, Image: CanvasImage } = canvasModule;
+
+    // Set up Image for canvas BEFORE importing pdfjs-dist
+    // PDF.js needs a global Image constructor for rendering inline images
+    if (typeof (globalThis as { Image?: unknown }).Image === 'undefined') {
+      (globalThis as unknown as { Image: typeof CanvasImage }).Image = CanvasImage;
+      console.log('✅ Set up globalThis.Image for PDF.js canvas rendering');
+    }
+
+    // Dynamic import of pdfjs-dist after setting up global Image
+    const pdfjs = await import('pdfjs-dist');
 
     // Register system fonts for better text rendering
     // This helps prevent □□□ (missing glyph) characters
@@ -236,53 +242,16 @@ export async function convertPDFToImagesWithPDFJS(
     // Convert Buffer to Uint8Array (PDF.js requirement)
     const uint8Array = new Uint8Array(pdfBuffer);
 
-    // Set up Image for canvas - this fixes the "Image or Canvas expected" error
-    // PDF.js needs a global Image constructor for rendering inline images
-    if (typeof (globalThis as { Image?: unknown }).Image === 'undefined') {
-      (globalThis as unknown as { Image: typeof canvasModule.Image }).Image = canvasModule.Image;
-    }
-
-    // Configure font paths - use local node_modules instead of CDN
-    // Try to find pdfjs-dist package location (works in both dev and production)
-    let standardFontDataUrl: string | undefined;
-    let cMapUrl: string | undefined;
-
-    try {
-      // Use require.resolve to find the actual location of pdfjs-dist
-      // This works whether we're in src/ (dev) or dist/ (production)
-      const pdfjsPackageJson = require.resolve('pdfjs-dist/package.json');
-      const pdfjsPath = path.dirname(pdfjsPackageJson);
-
-      const standardFontsPath = path.join(pdfjsPath, 'standard_fonts');
-      const cMapsPath = path.join(pdfjsPath, 'cmaps');
-
-      // Check if paths exist before using them
-      if (fs.existsSync(standardFontsPath)) {
-        standardFontDataUrl = `file://${standardFontsPath}/`;
-        console.log(`✅ Found pdfjs standard fonts at: ${standardFontsPath}`);
-      } else {
-        console.warn('⚠️  pdfjs standard_fonts directory not found');
-      }
-
-      if (fs.existsSync(cMapsPath)) {
-        cMapUrl = `file://${cMapsPath}/`;
-        console.log(`✅ Found pdfjs cmaps at: ${cMapsPath}`);
-      } else {
-        console.warn('⚠️  pdfjs cmaps directory not found');
-      }
-    } catch (error) {
-      console.warn('⚠️  Could not locate pdfjs-dist assets:', error);
-      // Continue without font URLs - PDF.js will work but may not render all fonts perfectly
-    }
+    // Configure font paths - DISABLED for now as they cause issues in production
+    // PDF.js will use its built-in font rendering instead
+    // This may result in some Unicode characters not displaying perfectly,
+    // but it's better than crashing with "require is not defined"
+    console.log('ℹ️  Using PDF.js built-in font rendering (external fonts disabled)');
 
     const loadingTask = pdfjs.getDocument({
       data: uint8Array,
       // Enable font rendering for proper text display
       disableFontFace: false,
-      // Use standard fonts from local pdfjs-dist package (if available)
-      ...(standardFontDataUrl && { standardFontDataUrl }),
-      // Enable CMap for character mapping (needed for Unicode, if available)
-      ...(cMapUrl && { cMapUrl, cMapPacked: true }),
       // Ensure fonts are properly embedded
       useSystemFonts: true,
     });
