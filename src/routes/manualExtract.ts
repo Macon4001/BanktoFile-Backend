@@ -16,6 +16,7 @@ import {
   checkIpRateLimitMiddleware,
   logIpConversionMiddleware,
 } from '../middleware/ipRateLimitMiddleware.js';
+import { eventsService } from '../services/eventsService.js';
 
 const router = Router();
 const regionExtractor = new RegionExtractor();
@@ -144,7 +145,7 @@ router.post(
       let parsedPageGrids;
       try {
         parsedPageGrids = typeof pageGrids === 'string' ? JSON.parse(pageGrids) : pageGrids;
-      } catch (error) {
+      } catch {
         res.status(400).json({ error: 'Invalid pageGrids JSON format' });
         return;
       }
@@ -156,7 +157,7 @@ router.post(
 
       console.log('📋 Multi-page extraction request:');
       console.log(`   Total page grids: ${parsedPageGrids.length}`);
-      console.log(`   Pages: ${parsedPageGrids.map((pg: any) => pg.page).join(', ')}`);
+      console.log(`   Pages: ${parsedPageGrids.map((pg: { page: number }) => pg.page).join(', ')}`);
 
       // Validate each page grid
       for (const pageGrid of parsedPageGrids) {
@@ -176,6 +177,22 @@ router.post(
         pageGrids: parsedPageGrids,
       });
 
+      // Log manual extraction event
+      const sessionId = req.headers['x-session-id'] as string || 'unknown';
+      try {
+        await eventsService.createEvent(sessionId, 'manual_extraction_completed', {
+          fileName: req.file.originalname,
+          pageCount: parsedPageGrids.length,
+          totalRows: result.totalRows,
+          transactionCount: result.transactions.length,
+          userId: req.userId || 'anonymous',
+          extractionType: 'multi_page',
+        });
+      } catch (eventError) {
+        console.error('Failed to log manual extraction event:', eventError);
+        // Don't fail the request if event logging fails
+      }
+
       res.status(200).json({
         success: true,
         transactions: result.transactions,
@@ -192,7 +209,7 @@ router.post(
     let parsedColumns: ColumnDefinition[];
     try {
       parsedColumns = typeof columns === 'string' ? JSON.parse(columns) : columns;
-    } catch (error) {
+    } catch {
       res.status(400).json({ error: 'Invalid columns JSON format' });
       return;
     }
@@ -210,7 +227,7 @@ router.post(
     if (region) {
       try {
         parsedRegion = typeof region === 'string' ? JSON.parse(region) : region;
-      } catch (error) {
+      } catch {
         res.status(400).json({ error: 'Invalid region JSON format' });
         return;
       }
@@ -221,7 +238,7 @@ router.post(
     if (rows) {
       try {
         parsedRows = typeof rows === 'string' ? JSON.parse(rows) : rows;
-      } catch (error) {
+      } catch {
         res.status(400).json({ error: 'Invalid rows JSON format' });
         return;
       }
@@ -263,6 +280,22 @@ router.post(
       skipHeaderRows: parsedSkipHeaderRows,
       region: parsedRegion,
     });
+
+    // Log manual extraction event
+    const sessionId = req.headers['x-session-id'] as string || 'unknown';
+    try {
+      await eventsService.createEvent(sessionId, 'manual_extraction_completed', {
+        fileName: req.file.originalname,
+        pageCount: parsedPages === 'all' ? 'all' : parsedPages.length,
+        totalRows: result.totalRows,
+        transactionCount: result.transactions.length,
+        userId: req.userId || 'anonymous',
+        extractionType: 'legacy_single_grid',
+      });
+    } catch (eventError) {
+      console.error('Failed to log manual extraction event:', eventError);
+      // Don't fail the request if event logging fails
+    }
 
     res.status(200).json({
       success: true,
