@@ -135,7 +135,8 @@ export async function convertPDFToImagesWithPDFJS(
     }
 
     // Dynamic import of pdfjs-dist after setting up global Image
-    const pdfjs = await import('pdfjs-dist');
+    // Use legacy build for Node.js environments
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
 
     // Register system fonts for better text rendering
     // This helps prevent □□□ (missing glyph) characters
