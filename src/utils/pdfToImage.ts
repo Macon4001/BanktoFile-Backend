@@ -322,8 +322,8 @@ export async function convertPDFToImagesWithPDFJS(
 /**
  * Smart converter that tries pdf-poppler first, then falls back to PDF.js
  *
- * Note: PDF.js fallback has known issues with PDFs containing inline images.
- * For production use, ensure poppler-utils is installed in the deployment environment.
+ * Note: PDF.js fallback may have issues with some PDFs containing inline images.
+ * For best results, ensure poppler-utils is installed in the deployment environment.
  */
 export async function convertPDFToImagesAuto(
   pdfBuffer: Buffer,
@@ -335,15 +335,20 @@ export async function convertPDFToImagesAuto(
   } catch (error: unknown) {
     const err = error as Error & { message: string };
     if (err.message.includes('pdftoppm')) {
-      console.error('❌ poppler-utils (pdftoppm) not found in PATH');
-      console.error('   This is required for PDF to image conversion');
-      console.error('   PDF.js fallback is disabled due to inline image rendering issues');
+      console.log('⚠️  pdftoppm not found, falling back to PDF.js...');
+      console.log('   Note: PDF.js may fail on some PDFs with inline images');
 
-      throw new Error(
-        'PDF conversion requires poppler-utils to be installed. ' +
-        'Please ensure pdftoppm is available in the system PATH. ' +
-        'Install with: apt-get install poppler-utils (Linux) or brew install poppler (macOS)'
-      );
+      try {
+        // Fall back to PDF.js if poppler is not available
+        return await convertPDFToImagesWithPDFJS(pdfBuffer, options);
+      } catch (pdfjsError) {
+        console.error('❌ PDF.js conversion also failed:', pdfjsError);
+        throw new Error(
+          'PDF conversion failed with both poppler and PDF.js. ' +
+          'This PDF may require poppler-utils to be installed. ' +
+          `Error: ${pdfjsError instanceof Error ? pdfjsError.message : String(pdfjsError)}`
+        );
+      }
     }
     throw err;
   }

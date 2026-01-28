@@ -17,12 +17,7 @@ nixpkgsArchive = "nixpkgs-unstable"
 # Verify poppler installation and install Node.js dependencies
 # Use npm ci for deterministic installs and skip scripts (husky prepare)
 cmds = [
-  "echo 'Current PATH:'",
-  "echo $PATH",
-  "echo 'Checking for pdftoppm...'",
-  "which pdftoppm || find /nix/store -name pdftoppm 2>/dev/null | head -n 1",
-  "pdftoppm -v || echo 'WARNING: pdftoppm not executable'",
-  "ls -la /nix/var/nix/profiles/default/bin/ || echo 'No default profile bin'",
+  "which pdftoppm || echo 'WARNING: pdftoppm not found in PATH'",
   "npm ci --ignore-scripts || npm install --ignore-scripts"
 ]
 
@@ -32,9 +27,4 @@ cmds = ["npm run build"]
 
 [start]
 # Start the application
-# Ensure Nix store binaries are in PATH at runtime
 cmd = "npm start"
-
-[variables]
-# Add common Nix binary paths to ensure poppler tools are found at runtime
-PATH = "/root/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
