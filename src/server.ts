@@ -140,6 +140,22 @@ app.listen(PORT, async () => {
   console.log(`📝 Environment: ${process.env.NODE_ENV || "development"}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
 
+  // Debug: Check for pdftoppm in PATH
+  if (process.env.NODE_ENV === 'production') {
+    console.log(`🔍 Checking for pdftoppm in PATH...`);
+    console.log(`   PATH: ${process.env.PATH?.split(':').slice(0, 5).join(', ')}...`);
+
+    const { exec } = await import('child_process');
+    exec('which pdftoppm', (error, stdout) => {
+      if (error) {
+        console.log(`❌ pdftoppm not found in PATH`);
+        console.log(`   Will use PDF.js fallback (may fail on some PDFs)`);
+      } else {
+        console.log(`✅ pdftoppm found at: ${stdout.trim()}`);
+      }
+    });
+  }
+
   // Initialize services in background
   await initializeServices();
 });
