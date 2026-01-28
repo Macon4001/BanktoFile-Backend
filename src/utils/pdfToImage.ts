@@ -35,10 +35,23 @@ async function findPdftoppm(): Promise<string | null> {
     // Not in PATH, search common Nix store locations
     console.log('🔍 pdftoppm not in PATH, searching /nix/store...');
 
+    // First check if /nix/store even exists
+    try {
+      const nixStoreExists = fs.existsSync('/nix/store');
+      console.log(`   /nix/store exists: ${nixStoreExists}`);
+
+      if (nixStoreExists) {
+        const { stdout: lsOutput } = await execPromise('ls /nix/store | grep -i poppler | head -n 5');
+        console.log(`   Poppler packages found: ${lsOutput.trim() || 'none'}`);
+      }
+    } catch {
+      console.log('   No poppler packages found in /nix/store');
+    }
+
     try {
       const { stdout } = await execPromise(
         'find /nix/store -name pdftoppm -type f 2>/dev/null | head -n 1',
-        { timeout: 5000 }
+        { timeout: 10000 }
       );
       const foundPath = stdout.trim();
       if (foundPath) {
