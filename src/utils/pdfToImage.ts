@@ -138,6 +138,9 @@ export async function convertPDFToImagesWithPDFJS(
     // Use legacy build for Node.js environments
     const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
 
+    // Disable worker to avoid compatibility issues in Node.js
+    pdfjs.GlobalWorkerOptions.workerSrc = '';
+
     // Register system fonts for better text rendering
     // This helps prevent □□□ (missing glyph) characters
     try {
@@ -275,11 +278,32 @@ export async function convertPDFToImagesWithPDFJS(
       // Type assertion needed as imageSmoothingQuality is not in Node canvas types
       (context as { imageSmoothingQuality?: string }).imageSmoothingQuality = 'high';
 
+      // Create a canvas factory for PDF.js to use for inline images
+      const canvasFactory = {
+        create: (width: number, height: number) => {
+          const imgCanvas = createCanvas(width, height);
+          return {
+            canvas: imgCanvas,
+            context: imgCanvas.getContext('2d'),
+          };
+        },
+        reset: (canvasAndContext: { canvas: unknown; context: unknown }, width: number, height: number) => {
+          const { canvas: c } = canvasAndContext as { canvas: { width: number; height: number } };
+          c.width = width;
+          c.height = height;
+        },
+        destroy: () => {
+          // No cleanup needed for node-canvas
+        },
+      };
+
       await page.render({
         canvasContext: context,
         viewport: viewport,
         // Enable text rendering improvements
         intent: 'display',
+        // Provide canvas factory for inline images
+        canvasFactory,
       } as never).promise;
 
       // Convert canvas to buffer
