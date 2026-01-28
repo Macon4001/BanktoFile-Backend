@@ -11,6 +11,50 @@ import * as os from 'os';
 
 const execPromise = promisify(exec);
 
+// Cache for pdftoppm path - search for it once at startup
+let pdftoppmPath: string | null = null;
+let pdftoppmSearched = false;
+
+/**
+ * Find pdftoppm executable, checking common locations and Nix store
+ */
+async function findPdftoppm(): Promise<string | null> {
+  if (pdftoppmSearched) {
+    return pdftoppmPath;
+  }
+
+  pdftoppmSearched = true;
+
+  try {
+    // First try 'which' to find it in PATH
+    const { stdout } = await execPromise('which pdftoppm');
+    pdftoppmPath = stdout.trim();
+    console.log(`✅ Found pdftoppm in PATH: ${pdftoppmPath}`);
+    return pdftoppmPath;
+  } catch {
+    // Not in PATH, search common Nix store locations
+    console.log('🔍 pdftoppm not in PATH, searching /nix/store...');
+
+    try {
+      const { stdout } = await execPromise(
+        'find /nix/store -name pdftoppm -type f 2>/dev/null | head -n 1',
+        { timeout: 5000 }
+      );
+      const foundPath = stdout.trim();
+      if (foundPath) {
+        pdftoppmPath = foundPath;
+        console.log(`✅ Found pdftoppm in Nix store: ${pdftoppmPath}`);
+        return pdftoppmPath;
+      }
+    } catch (searchError) {
+      console.error('⚠️  Failed to search for pdftoppm:', searchError);
+    }
+
+    console.log('❌ pdftoppm not found anywhere');
+    return null;
+  }
+}
+
 export interface PdfToImageOptions {
   /**
    * Resolution in DPI (dots per inch)
@@ -51,11 +95,17 @@ export async function convertPDFToImages(
     // Write PDF buffer to temp file
     await fs.promises.writeFile(pdfPath, pdfBuffer);
 
-    // Build pdftoppm command
+    // Find pdftoppm executable (searches Nix store if not in PATH)
+    const pdftoppmExe = await findPdftoppm();
+    if (!pdftoppmExe) {
+      throw new Error('pdftoppm command not found. Please install poppler-utils.');
+    }
+
+    // Build pdftoppm command with full path
     const formatFlag = format === 'jpeg' || format === 'jpg' ? '-jpeg' : '-png';
     const lastPageFlag = maxPages ? `-l ${maxPages}` : '';
 
-    const command = `pdftoppm ${formatFlag} -r ${dpi} ${lastPageFlag} "${pdfPath}" "${outputPrefix}"`;
+    const command = `"${pdftoppmExe}" ${formatFlag} -r ${dpi} ${lastPageFlag} "${pdfPath}" "${outputPrefix}"`;
 
     console.log(`🖼️  Converting PDF to images at ${dpi} DPI...`);
 
