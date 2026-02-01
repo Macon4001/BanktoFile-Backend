@@ -360,6 +360,12 @@ export class BlogController {
 
       // Handle scheduling/publishing logic
       // Check status FIRST - if explicitly setting to published/draft, that takes priority
+      console.log('[updatePost] Received updates:', {
+        status: updates.status,
+        scheduledAt: updates.scheduledAt,
+        postId: id,
+      });
+
       if (updates.status !== undefined) {
         dbUpdates.status = updates.status;
         if (updates.status === 'published') {
@@ -395,6 +401,7 @@ export class BlogController {
           dbUpdates.scheduled_at = scheduledDate;
           dbUpdates.auto_publish = true;
           dbUpdates.published = false;
+          console.log('[updatePost] Set scheduled_at:', scheduledDate);
         }
       } else if (updates.scheduledAt !== undefined) {
         // Only process scheduledAt if status wasn't explicitly set
