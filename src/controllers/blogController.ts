@@ -437,7 +437,19 @@ export class BlogController {
 
       if (updates.metaDescription !== undefined) dbUpdates.meta_description = updates.metaDescription;
 
+      console.log('[updatePost] Final dbUpdates being sent to database:', {
+        ...dbUpdates,
+        scheduled_at: dbUpdates.scheduled_at instanceof Date ? dbUpdates.scheduled_at.toISOString() : dbUpdates.scheduled_at,
+      });
+
       const updatedPost = await db.updateBlogPost(id, dbUpdates);
+
+      console.log('[updatePost] Updated post result:', {
+        id: updatedPost?.id,
+        status: updatedPost?.status,
+        scheduled_at: updatedPost?.scheduled_at,
+        auto_publish: updatedPost?.auto_publish,
+      });
 
       if (!updatedPost) {
         res.status(404).json({
