@@ -72,6 +72,16 @@ app.use('/blog-images', express.static(path.join(publicPath, 'blog-images'), {
   }
 }));
 
+// Serve tutorial videos from public/Videos folder
+// Videos can be accessed at: /Videos/video-name.mp4
+app.use('/Videos', express.static(path.join(publicPath, 'Videos'), {
+  maxAge: '1y', // Cache for 1 year
+  immutable: true, // Videos never change
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  }
+}));
+
 // Add response headers middleware (for API routes)
 app.use((_req: Request, res: Response, next) => {
   // Only set JSON content-type for API routes
