@@ -551,7 +551,7 @@ export class PostgresStore {
       const query = `
         SELECT * FROM blog_posts
         ${status ? 'WHERE status = $1' : ''}
-        ORDER BY created_at DESC
+        ORDER BY COALESCE(published_at, created_at) DESC
         ${limit ? `LIMIT ${limit}` : ''}
         ${offset ? `OFFSET ${offset}` : ''}
       `;
