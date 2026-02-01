@@ -185,6 +185,15 @@ export class BlogController {
       let scheduledDate: Date | undefined;
       let autoPublish = false;
 
+      // Validate that scheduled posts have a scheduled date
+      if (finalStatus === 'scheduled' && !scheduledAt) {
+        res.status(400).json({
+          success: false,
+          error: 'Scheduled date is required when creating a scheduled post',
+        });
+        return;
+      }
+
       if (scheduledAt) {
         // Scheduled publishing
         scheduledDate = new Date(scheduledAt);
@@ -366,8 +375,15 @@ export class BlogController {
           // Optionally clear scheduling when changing to draft
           dbUpdates.auto_publish = false;
           dbUpdates.scheduled_at = null;
-        } else if (updates.status === 'scheduled' && updates.scheduledAt) {
-          // Setting to scheduled status WITH a scheduled date
+        } else if (updates.status === 'scheduled') {
+          // Setting to scheduled status requires a scheduled date
+          if (!updates.scheduledAt) {
+            res.status(400).json({
+              success: false,
+              error: 'Scheduled date is required when setting status to scheduled',
+            });
+            return;
+          }
           const scheduledDate = new Date(updates.scheduledAt);
           if (isNaN(scheduledDate.getTime())) {
             res.status(400).json({
