@@ -378,9 +378,11 @@ export class BlogController {
           dbUpdates.scheduled_at = null;
         } else if (updates.status === 'draft') {
           dbUpdates.published = false;
-          // Optionally clear scheduling when changing to draft
-          dbUpdates.auto_publish = false;
-          dbUpdates.scheduled_at = null;
+          // Clear scheduling when changing to draft (unless scheduledAt is also provided)
+          if (!updates.scheduledAt) {
+            dbUpdates.auto_publish = false;
+            dbUpdates.scheduled_at = null;
+          }
         } else if (updates.status === 'scheduled') {
           // Setting to scheduled status requires a scheduled date
           if (!updates.scheduledAt) {
@@ -401,10 +403,13 @@ export class BlogController {
           dbUpdates.scheduled_at = scheduledDate;
           dbUpdates.auto_publish = true;
           dbUpdates.published = false;
-          console.log('[updatePost] Set scheduled_at:', scheduledDate);
+          console.log('[updatePost] Set scheduled_at to:', scheduledDate.toISOString());
         }
-      } else if (updates.scheduledAt !== undefined) {
-        // Only process scheduledAt if status wasn't explicitly set
+      }
+
+      // Always process scheduledAt if it's provided (even if status was also set)
+      // This handles the case where the status is already 'scheduled' and we're just updating the date
+      if (updates.scheduledAt !== undefined && updates.status !== 'published') {
         if (updates.scheduledAt) {
           // Setting a scheduled date
           const scheduledDate = new Date(updates.scheduledAt);
@@ -417,10 +422,14 @@ export class BlogController {
           }
           dbUpdates.scheduled_at = scheduledDate;
           dbUpdates.auto_publish = true;
-          dbUpdates.status = 'scheduled';
+          // Set status to scheduled if not already set
+          if (!dbUpdates.status) {
+            dbUpdates.status = 'scheduled';
+          }
           dbUpdates.published = false;
-        } else {
-          // Clearing scheduled date
+          console.log('[updatePost] Processed scheduledAt, set to:', scheduledDate.toISOString());
+        } else if (!dbUpdates.status || dbUpdates.status === 'draft') {
+          // Only clear scheduled date if we're not setting status to scheduled
           dbUpdates.scheduled_at = null;
           dbUpdates.auto_publish = false;
         }
