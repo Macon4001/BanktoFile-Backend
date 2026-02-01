@@ -210,10 +210,13 @@ export class BlogController {
       // Auto-generate featured image if none provided
       if (!featuredImageUrl) {
         try {
+          console.log(`🎨 Auto-generating featured image for: ${title}`);
           const imageBuffer = await generateFeaturedImage({
             title,
             category: category || 'general',
           });
+
+          console.log(`✅ Generated image buffer: ${imageBuffer.length} bytes`);
 
           const imageId = await db.saveBlogImage({
             filename: `${finalSlug}-featured.png`,
@@ -222,10 +225,18 @@ export class BlogController {
             data: imageBuffer,
           });
 
+          console.log(`✅ Saved image to database with ID: ${imageId}`);
+
           finalFeaturedImageUrl = `/api/blog/images/${imageId}`;
           finalFeaturedImageAlt = `Featured image for: ${title}`;
         } catch (imageError) {
-          console.error('Error generating featured image:', imageError);
+          console.error('❌ Error generating featured image:', imageError);
+          console.error('Error details:', {
+            message: imageError instanceof Error ? imageError.message : 'Unknown error',
+            stack: imageError instanceof Error ? imageError.stack : undefined,
+            title,
+            category: category || 'general',
+          });
           // Continue without image if generation fails
         }
       }
@@ -640,6 +651,53 @@ export class BlogController {
     } catch (error) {
       console.error('Error fetching image:', error);
       res.status(500).send('Failed to fetch image');
+    }
+  }
+
+  // Test image generation (admin only)
+  async testImageGeneration(req: Request, res: Response): Promise<void> {
+    try {
+      console.log('🧪 Testing image generation...');
+
+      // Test 1: Generate image
+      const imageBuffer = await generateFeaturedImage({
+        title: 'Test Image Generation',
+        category: 'test',
+      });
+
+      console.log('✅ Image generated successfully');
+      console.log(`📊 Image size: ${imageBuffer.length} bytes`);
+
+      // Test 2: Save to database
+      const imageId = await db.saveBlogImage({
+        filename: 'test-image.png',
+        mimetype: 'image/png',
+        size: imageBuffer.length,
+        data: imageBuffer,
+      });
+
+      console.log(`✅ Image saved to database with ID: ${imageId}`);
+
+      // Return the image URL
+      res.status(200).json({
+        success: true,
+        message: 'Image generation test successful',
+        imageUrl: `/api/blog/images/${imageId}`,
+        imageSize: imageBuffer.length,
+        imageId,
+      });
+    } catch (error) {
+      console.error('❌ Error testing image generation:', error);
+      console.error('Error details:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+
+      res.status(500).json({
+        success: false,
+        error: 'Image generation test failed',
+        details: error instanceof Error ? error.message : 'Unknown error',
+      });
     }
   }
 }

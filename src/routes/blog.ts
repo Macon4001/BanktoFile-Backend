@@ -65,4 +65,7 @@ router.get('/admin/newsletter/subscribers', requireAdmin, (req, res) => blogCont
 router.post('/admin/posts/import-md', requireAdmin, markdownUpload.single('file'), (req, res) => blogImportController.importMarkdownPost(req, res));
 router.post('/admin/posts/import-md-bulk', requireAdmin, markdownUpload.array('files', 50), (req, res) => blogImportController.importMarkdownBulk(req, res));
 
+// Test image generation endpoint
+router.get('/admin/test-image-generation', requireAdmin, (req, res) => blogController.testImageGeneration(req, res));
+
 export default router;
