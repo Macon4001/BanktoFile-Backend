@@ -677,6 +677,8 @@ export class PostgresStore {
         status: 'status',
         published: 'published',
         published_at: 'published_at',
+        scheduled_at: 'scheduled_at',
+        auto_publish: 'auto_publish',
         meta_description: 'meta_description',
         meta_keywords: 'meta_keywords',
       };
