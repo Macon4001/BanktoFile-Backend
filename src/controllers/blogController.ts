@@ -339,7 +339,38 @@ export class BlogController {
       if (updates.featuredImageAlt !== undefined) dbUpdates.featured_image_alt = updates.featuredImageAlt;
 
       // Handle scheduling/publishing logic
-      if (updates.scheduledAt !== undefined) {
+      // Check status FIRST - if explicitly setting to published/draft, that takes priority
+      if (updates.status !== undefined) {
+        dbUpdates.status = updates.status;
+        if (updates.status === 'published') {
+          dbUpdates.published = true;
+          if (!updates.published_at) {
+            dbUpdates.published_at = new Date();
+          }
+          // Clear scheduling when manually publishing
+          dbUpdates.auto_publish = false;
+          dbUpdates.scheduled_at = null;
+        } else if (updates.status === 'draft') {
+          dbUpdates.published = false;
+          // Optionally clear scheduling when changing to draft
+          dbUpdates.auto_publish = false;
+          dbUpdates.scheduled_at = null;
+        } else if (updates.status === 'scheduled' && updates.scheduledAt) {
+          // Setting to scheduled status WITH a scheduled date
+          const scheduledDate = new Date(updates.scheduledAt);
+          if (isNaN(scheduledDate.getTime())) {
+            res.status(400).json({
+              success: false,
+              error: 'Invalid scheduled date format',
+            });
+            return;
+          }
+          dbUpdates.scheduled_at = scheduledDate;
+          dbUpdates.auto_publish = true;
+          dbUpdates.published = false;
+        }
+      } else if (updates.scheduledAt !== undefined) {
+        // Only process scheduledAt if status wasn't explicitly set
         if (updates.scheduledAt) {
           // Setting a scheduled date
           const scheduledDate = new Date(updates.scheduledAt);
@@ -358,22 +389,6 @@ export class BlogController {
           // Clearing scheduled date
           dbUpdates.scheduled_at = null;
           dbUpdates.auto_publish = false;
-        }
-      } else if (updates.status !== undefined) {
-        dbUpdates.status = updates.status;
-        if (updates.status === 'published') {
-          dbUpdates.published = true;
-          if (!updates.published_at) {
-            dbUpdates.published_at = new Date();
-          }
-          // Clear scheduling when manually publishing
-          dbUpdates.auto_publish = false;
-          dbUpdates.scheduled_at = null;
-        } else if (updates.status === 'draft') {
-          dbUpdates.published = false;
-          // Optionally clear scheduling when changing to draft
-          dbUpdates.auto_publish = false;
-          dbUpdates.scheduled_at = null;
         }
       }
 
