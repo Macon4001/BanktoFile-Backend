@@ -62,9 +62,11 @@ export interface BlogPost {
   featured_image_filename?: string;
   featured_image_mimetype?: string;
   featured_image_size?: number;
-  status: 'draft' | 'published';
+  status: 'draft' | 'published' | 'scheduled';
   published: boolean; // Kept for backwards compatibility
   published_at?: Date;
+  scheduled_at?: Date;
+  auto_publish?: boolean;
   meta_description?: string;
   meta_keywords?: string;
   created_at: Date;

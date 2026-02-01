@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { BlogController } from '../controllers/blogController.js';
+import { BlogImportController } from '../controllers/blogImportController.js';
 import { requireAdmin } from '../middleware/adminAuth.js';
 import multer from 'multer';
 
 const router = Router();
 const blogController = new BlogController();
+const blogImportController = new BlogImportController();
 
 // Configure multer for image uploads (store in memory)
 const upload = multer({
@@ -18,6 +20,25 @@ const upload = multer({
       cb(null, true);
     } else {
       cb(new Error('Only image files are allowed'));
+    }
+  },
+});
+
+// Configure multer for markdown file uploads
+const markdownUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit for markdown files
+  },
+  fileFilter: (_req, file, cb) => {
+    // Allow markdown and text files
+    if (file.mimetype === 'text/markdown' ||
+        file.mimetype === 'text/plain' ||
+        file.originalname.endsWith('.md') ||
+        file.originalname.endsWith('.markdown')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only markdown files are allowed'));
     }
   },
 });
@@ -39,5 +60,9 @@ router.put('/admin/posts/:id', requireAdmin, (req, res) => blogController.update
 router.delete('/admin/posts/:id', requireAdmin, (req, res) => blogController.deletePost(req, res));
 router.post('/admin/upload-image', requireAdmin, upload.single('image'), (req, res) => blogController.uploadImage(req, res));
 router.get('/admin/newsletter/subscribers', requireAdmin, (req, res) => blogController.getNewsletterSubscribers(req, res));
+
+// Markdown import routes
+router.post('/admin/posts/import-md', requireAdmin, markdownUpload.single('file'), (req, res) => blogImportController.importMarkdownPost(req, res));
+router.post('/admin/posts/import-md-bulk', requireAdmin, markdownUpload.array('files', 50), (req, res) => blogImportController.importMarkdownBulk(req, res));
 
 export default router;

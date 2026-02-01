@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { db } from '../db/postgres.js';
+import { generateFeaturedImage } from '../services/imageGenerator.js';
 
 export class BlogController {
   // Get all published blog posts (public)
@@ -135,6 +136,7 @@ export class BlogController {
         featuredImageAlt,
         status,
         metaDescription,
+        scheduledAt,
       } = req.body;
 
       // Validate required fields
@@ -176,8 +178,57 @@ export class BlogController {
         return;
       }
 
-      const finalStatus = status || 'draft';
-      const isPublished = finalStatus === 'published';
+      // Handle scheduling logic
+      let finalStatus = status || 'draft';
+      let isPublished = false;
+      let publishedAt: Date | undefined;
+      let scheduledDate: Date | undefined;
+      let autoPublish = false;
+
+      if (scheduledAt) {
+        // Scheduled publishing
+        scheduledDate = new Date(scheduledAt);
+        if (isNaN(scheduledDate.getTime())) {
+          res.status(400).json({
+            success: false,
+            error: 'Invalid scheduled date format',
+          });
+          return;
+        }
+        finalStatus = 'scheduled';
+        autoPublish = true;
+        isPublished = false;
+      } else if (finalStatus === 'published') {
+        // Publish immediately
+        isPublished = true;
+        publishedAt = new Date();
+      }
+
+      let finalFeaturedImageUrl = featuredImageUrl;
+      let finalFeaturedImageAlt = featuredImageAlt;
+
+      // Auto-generate featured image if none provided
+      if (!featuredImageUrl) {
+        try {
+          const imageBuffer = await generateFeaturedImage({
+            title,
+            category: category || 'general',
+          });
+
+          const imageId = await db.saveBlogImage({
+            filename: `${finalSlug}-featured.png`,
+            mimetype: 'image/png',
+            size: imageBuffer.length,
+            data: imageBuffer,
+          });
+
+          finalFeaturedImageUrl = `/api/blog/images/${imageId}`;
+          finalFeaturedImageAlt = `Featured image for: ${title}`;
+        } catch (imageError) {
+          console.error('Error generating featured image:', imageError);
+          // Continue without image if generation fails
+        }
+      }
 
       const newPost = await db.createBlogPost({
         title,
@@ -188,11 +239,13 @@ export class BlogController {
         tags: tags || [],
         read_time: readTime,
         author: author || 'Michael',
-        featured_image_url: featuredImageUrl, // Now just stores the /api/blog/images/:id URL
-        featured_image_alt: featuredImageAlt,
+        featured_image_url: finalFeaturedImageUrl,
+        featured_image_alt: finalFeaturedImageAlt,
         status: finalStatus,
         published: isPublished,
-        published_at: isPublished ? new Date() : undefined,
+        published_at: publishedAt,
+        scheduled_at: scheduledDate,
+        auto_publish: autoPublish,
         meta_description: metaDescription,
       });
 
@@ -284,13 +337,46 @@ export class BlogController {
       if (updates.author !== undefined) dbUpdates.author = updates.author;
       if (updates.featuredImageUrl !== undefined) dbUpdates.featured_image_url = updates.featuredImageUrl;
       if (updates.featuredImageAlt !== undefined) dbUpdates.featured_image_alt = updates.featuredImageAlt;
-      if (updates.status !== undefined) {
+
+      // Handle scheduling/publishing logic
+      if (updates.scheduledAt !== undefined) {
+        if (updates.scheduledAt) {
+          // Setting a scheduled date
+          const scheduledDate = new Date(updates.scheduledAt);
+          if (isNaN(scheduledDate.getTime())) {
+            res.status(400).json({
+              success: false,
+              error: 'Invalid scheduled date format',
+            });
+            return;
+          }
+          dbUpdates.scheduled_at = scheduledDate;
+          dbUpdates.auto_publish = true;
+          dbUpdates.status = 'scheduled';
+          dbUpdates.published = false;
+        } else {
+          // Clearing scheduled date
+          dbUpdates.scheduled_at = null;
+          dbUpdates.auto_publish = false;
+        }
+      } else if (updates.status !== undefined) {
         dbUpdates.status = updates.status;
-        dbUpdates.published = updates.status === 'published';
-        if (updates.status === 'published' && !updates.published_at) {
-          dbUpdates.published_at = new Date();
+        if (updates.status === 'published') {
+          dbUpdates.published = true;
+          if (!updates.published_at) {
+            dbUpdates.published_at = new Date();
+          }
+          // Clear scheduling when manually publishing
+          dbUpdates.auto_publish = false;
+          dbUpdates.scheduled_at = null;
+        } else if (updates.status === 'draft') {
+          dbUpdates.published = false;
+          // Optionally clear scheduling when changing to draft
+          dbUpdates.auto_publish = false;
+          dbUpdates.scheduled_at = null;
         }
       }
+
       if (updates.metaDescription !== undefined) dbUpdates.meta_description = updates.metaDescription;
 
       const updatedPost = await db.updateBlogPost(id, dbUpdates);

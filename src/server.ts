@@ -22,6 +22,7 @@ import usersRoutes from "./routes/users.js";
 import ipUsageRoutes from "./routes/ipUsage.js";
 import manualExtractRoutes from "./routes/manualExtract.js";
 import { ocrService } from "./services/ocrService.js";
+import { startPublishScheduler } from "./jobs/publishScheduled.js";
 
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -168,6 +169,9 @@ app.listen(PORT, async () => {
 
   // Initialize services in background
   await initializeServices();
+
+  // Start scheduled post publisher
+  startPublishScheduler();
 });
 
 // Graceful shutdown
