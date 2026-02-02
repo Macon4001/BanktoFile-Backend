@@ -1252,7 +1252,7 @@ export class PostgresStore {
   }
 
   // Get MRR over time (last 30 days)
-  async getMrrOverTime(days: number = 30): Promise<Array<{ date: string; mrr: number }>> {
+  async getMrrOverTime(days: number = 30): Promise<Array<{ date: string; mrr: number; projected_mrr: number }>> {
     const client = await pool.connect();
     try {
       // Plan pricing mapping
@@ -1282,38 +1282,58 @@ export class PostgresStore {
           CROSS JOIN users u
           WHERE u.email != 'macon4001@gmail.com'
             AND u.email NOT LIKE '%@anonymous.local'
+            AND u.subscription_status IN ('active', 'canceled')
+            AND u.created_at::date <= ds.date
+            AND (u.current_period_end IS NULL OR u.current_period_end::date >= ds.date)
+          GROUP BY ds.date, u.plan
+        ),
+        daily_plans_projected AS (
+          SELECT
+            ds.date,
+            u.plan,
+            COUNT(DISTINCT u.id)::integer as user_count
+          FROM date_series ds
+          CROSS JOIN users u
+          WHERE u.email != 'macon4001@gmail.com'
+            AND u.email NOT LIKE '%@anonymous.local'
+            -- For projected MRR, only include users who will continue paying (exclude canceled)
             AND u.subscription_status = 'active'
             AND u.created_at::date <= ds.date
             AND (u.current_period_end IS NULL OR u.current_period_end::date >= ds.date)
           GROUP BY ds.date, u.plan
         )
         SELECT
-          date::text,
-          plan,
-          user_count
-        FROM daily_plans
-        ORDER BY date ASC, plan
+          dp.date::text,
+          dp.plan,
+          dp.user_count,
+          COALESCE(dpp.user_count, 0)::integer as projected_user_count
+        FROM daily_plans dp
+        LEFT JOIN daily_plans_projected dpp ON dp.date = dpp.date AND dp.plan = dpp.plan
+        ORDER BY dp.date ASC, dp.plan
       `);
 
       // Group by date and calculate MRR
-      const mrrByDate: Record<string, number> = {};
+      const mrrByDate: Record<string, { mrr: number; projected_mrr: number }> = {};
 
       result.rows.forEach((row) => {
         const date = row.date;
         const plan = row.plan;
         const count = row.user_count;
+        const projectedCount = row.projected_user_count;
         const planPrice = planPricing[plan] || 0;
 
         if (!mrrByDate[date]) {
-          mrrByDate[date] = 0;
+          mrrByDate[date] = { mrr: 0, projected_mrr: 0 };
         }
-        mrrByDate[date] += planPrice * count;
+        mrrByDate[date].mrr += planPrice * count;
+        mrrByDate[date].projected_mrr += planPrice * projectedCount;
       });
 
       // Convert to array format
-      return Object.entries(mrrByDate).map(([date, mrr]) => ({
+      return Object.entries(mrrByDate).map(([date, { mrr, projected_mrr }]) => ({
         date,
         mrr,
+        projected_mrr,
       }));
     } finally {
       client.release();
