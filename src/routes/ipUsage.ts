@@ -44,8 +44,8 @@ router.get('/ip-usage', async (req: Request, res: Response) => {
       console.log('⚠️  [IP_USAGE] IP tracking disabled (development mode)');
       return res.json({
         conversionsUsed: 0,
-        dailyLimit: 3,
-        conversionsRemaining: 3,
+        dailyLimit: 1,
+        conversionsRemaining: 1,
       });
     }
 
@@ -55,7 +55,7 @@ router.get('/ip-usage', async (req: Request, res: Response) => {
 
     // Get current conversion count
     const conversionsUsed = await db.getIpConversionCount(clientIp);
-    const dailyLimit = 3;
+    const dailyLimit = 1;
     const conversionsRemaining = Math.max(0, dailyLimit - conversionsUsed);
 
     console.log(`📊 [IP_USAGE] IP ${clientIp}: ${conversionsUsed}/${dailyLimit} conversions today`);
@@ -71,8 +71,8 @@ router.get('/ip-usage', async (req: Request, res: Response) => {
     // Return default values on error (fail open)
     res.json({
       conversionsUsed: 0,
-      dailyLimit: 3,
-      conversionsRemaining: 3,
+      dailyLimit: 1,
+      conversionsRemaining: 1,
     });
   }
 });

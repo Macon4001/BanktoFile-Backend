@@ -39,7 +39,7 @@ function getClientIp(req: Request): string {
 
 /**
  * Middleware to check IP-based rate limiting for anonymous users
- * Blocks requests if an IP has exceeded the daily conversion limit (default: 3)
+ * Blocks requests if an IP has exceeded the daily conversion limit (default: 1)
  * Authenticated users bypass this check
  */
 export async function checkIpRateLimitMiddleware(
@@ -76,7 +76,7 @@ export async function checkIpRateLimitMiddleware(
     console.log(`🔒 [IP_RATE_LIMIT] Checking IP: ${clientIp}`);
 
     // Check if IP can convert
-    const dailyLimit = 3; // Free tier gets 3 conversions per day per IP
+    const dailyLimit = 1; // Anonymous users get 1 conversion per day
     const canConvert = await db.canConvertByIp(clientIp, dailyLimit);
     const currentCount = await db.getIpConversionCount(clientIp);
 
@@ -93,7 +93,7 @@ export async function checkIpRateLimitMiddleware(
         code: 'IP_RATE_LIMIT_EXCEEDED',
         conversionsUsed: currentCount,
         dailyLimit: dailyLimit,
-        message: `You've used all ${dailyLimit} free conversions for today. Create an account or upgrade to continue converting unlimited files.`,
+        message: `You've used your free conversion for today. Sign up to get 2 more conversions per day.`,
         resetTime: 'midnight UTC',
       });
     }
@@ -150,11 +150,11 @@ export function logIpConversionMiddleware(
         // Add IP usage info to response body for frontend
         body.ipUsage = {
           conversionsUsed: newCount,
-          dailyLimit: 3,
-          conversionsRemaining: Math.max(0, 3 - newCount),
+          dailyLimit: 1,
+          conversionsRemaining: Math.max(0, 1 - newCount),
         };
 
-        console.log(`📊 [IP_RATE_LIMIT] Adding IP usage to response: ${newCount}/3 (${3 - newCount} remaining)`);
+        console.log(`📊 [IP_RATE_LIMIT] Adding IP usage to response: ${newCount}/1 (${1 - newCount} remaining)`);
       }
     }
 

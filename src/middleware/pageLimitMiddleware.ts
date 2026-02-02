@@ -96,10 +96,10 @@ export async function checkPageLimitMiddleware(req: Request, res: Response, next
     let user;
 
     if (!userId) {
-      // No user ID provided - anonymous/free tier user
-      // These users are managed by localStorage on frontend for 3 free conversions
+      // No user ID provided - anonymous user
+      // These users get 1 conversion per day (managed by IP rate limiting)
       // Only check per-file page limit (5 pages max for free tier)
-      console.log(`🔒 [PAGE_LIMIT] No user ID found - anonymous free tier user`);
+      console.log(`🔒 [PAGE_LIMIT] No user ID found - anonymous user`);
 
       const pagesInFile = req.pagesInFile || 1;
       const freeTierLimit = 5; // Free tier max pages per file
