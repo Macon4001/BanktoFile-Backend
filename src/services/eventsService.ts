@@ -453,6 +453,39 @@ export class EventsService {
       client.release();
     }
   }
+
+  /**
+   * Get pricing page view counts
+   */
+  async getPricingPageViews(): Promise<{
+    today: number;
+    total: number;
+  }> {
+    const client = await pool.connect();
+    try {
+      // Count today's pricing page views
+      const todayResult = await client.query<{ count: string }>(
+        `SELECT COUNT(*) as count
+         FROM events
+         WHERE event_name = 'pricing_page_viewed'
+         AND created_at >= CURRENT_DATE`
+      );
+
+      // Count total pricing page views
+      const totalResult = await client.query<{ count: string }>(
+        `SELECT COUNT(*) as count
+         FROM events
+         WHERE event_name = 'pricing_page_viewed'`
+      );
+
+      return {
+        today: parseInt(todayResult.rows[0].count),
+        total: parseInt(totalResult.rows[0].count)
+      };
+    } finally {
+      client.release();
+    }
+  }
 }
 
 // Export singleton instance

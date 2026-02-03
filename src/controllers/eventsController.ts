@@ -322,6 +322,27 @@ export class EventsController {
       });
     }
   }
+
+  /**
+   * GET /api/admin/events/pricing-views
+   * Get pricing page view counts (today and total)
+   */
+  async getPricingPageViews(req: Request, res: Response): Promise<void> {
+    try {
+      const data = await eventsService.getPricingPageViews();
+
+      res.status(200).json({
+        success: true,
+        data,
+      });
+    } catch (error) {
+      console.error('Error fetching pricing page views:', error);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to fetch pricing page views',
+      });
+    }
+  }
 }
 
 // Export controller instance
