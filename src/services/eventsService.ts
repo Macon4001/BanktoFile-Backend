@@ -464,10 +464,12 @@ export class EventsService {
     const client = await pool.connect();
     try {
       // Count today's pricing page views
+      // Look for page_view events with metadata.page = 'pricing_page'
       const todayResult = await client.query<{ count: string }>(
         `SELECT COUNT(*) as count
          FROM events
-         WHERE event_name = 'pricing_page_viewed'
+         WHERE event_name = 'page_view'
+         AND metadata->>'page' = 'pricing_page'
          AND created_at >= CURRENT_DATE`
       );
 
@@ -475,7 +477,8 @@ export class EventsService {
       const totalResult = await client.query<{ count: string }>(
         `SELECT COUNT(*) as count
          FROM events
-         WHERE event_name = 'pricing_page_viewed'`
+         WHERE event_name = 'page_view'
+         AND metadata->>'page' = 'pricing_page'`
       );
 
       return {
