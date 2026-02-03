@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { stripe, getFilesLimit, PlanType } from '../config/stripe.js';
+import { stripe, getFilesLimit, getFilesLimitForUser, PlanType } from '../config/stripe.js';
 import { db } from '../db/postgres.js';
 
 const router = Router();
@@ -134,18 +134,21 @@ async function handleCheckoutComplete(session: any) {
     }
 
     // Update user with customer ID and reset usage
+    // New subscriptions are NOT grandfathered (is_grandfathered_basic = false by default)
+    const filesLimit = getFilesLimitForUser(plan, false);
     await db.updateUser(userId, {
       stripe_customer_id: session.customer as string,
       subscription_id: session.subscription as string,
       plan: plan,
-      monthly_files_limit: getFilesLimit(plan), // Set FILES limit, not pages
+      monthly_files_limit: filesLimit, // New subscribers get current limits (30 files for basic)
       files_used_monthly: 0, // Reset file usage on new purchase
       subscription_status: 'active',
+      is_grandfathered_basic: false, // New subscribers are not grandfathered
       ...(periodStart && { current_period_start: periodStart }),
       ...(periodEnd && { current_period_end: periodEnd }),
     });
 
-    console.log(`[WEBHOOK] ✅ Checkout completed for user ${userId}, plan: ${plan}, limit: ${getFilesLimit(plan)} files`);
+    console.log(`[WEBHOOK] ✅ Checkout completed for user ${userId}, plan: ${plan}, limit: ${filesLimit} files`);
   } catch (error) {
     console.error('[WEBHOOK] ❌ Error in handleCheckoutComplete:', error);
     throw error;
@@ -186,13 +189,18 @@ async function handleSubscriptionUpdate(subscription: any) {
 
     console.log('[WEBHOOK] Period timestamps:', { periodStart, periodEnd });
 
+    // Check if user is grandfathered to preserve their legacy limits
+    const isGrandfathered = user.is_grandfathered_basic || false;
+    const filesLimit = getFilesLimitForUser(plan, isGrandfathered);
+
     // Build update object - only include dates if they're valid
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updateData: any = {
       stripe_customer_id: subscription.customer,
       subscription_id: subscription.id,
       subscription_status: subscription.status as 'active' | 'canceled' | 'past_due' | 'trialing' | 'incomplete' | 'incomplete_expired' | 'unpaid',
       plan: plan,
-      monthly_files_limit: getFilesLimit(plan),
+      monthly_files_limit: filesLimit, // Respects grandfathering
     };
 
     // Only add dates if they exist and are valid numbers

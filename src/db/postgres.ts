@@ -21,6 +21,7 @@ export interface User {
   current_period_end?: Date;
   google_id?: string;
   picture?: string;
+  is_grandfathered_basic?: boolean; // TRUE = legacy 150 files/month, FALSE/NULL = new 30 files/month
   created_at: Date;
   updated_at: Date;
 

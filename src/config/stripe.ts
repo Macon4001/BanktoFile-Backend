@@ -44,12 +44,12 @@ export function getPricingTiers() {
     },
     basic: {
       name: 'Basic',
-      filesPerMonth: 150,
+      filesPerMonth: 30, // New subscribers get 30 files/month (legacy users get 150 via is_grandfathered_basic)
       maxPagesPerFile: 20,
       price: 20,
       priceId: process.env.STRIPE_BASIC_PRICE_ID || 'price_basic',
       features: [
-        '150 files per month',
+        '30 files per month',
         'Up to 20 pages per file',
         'CSV & XLSX formats',
         'Email support',
@@ -117,7 +117,18 @@ export function getPlanDetails(plan: PlanType) {
 }
 
 // Helper function to get files limit for a plan (monthly)
+// Note: This returns the default limit. Use getFilesLimitForUser() for grandfathered users
 export function getFilesLimit(plan: PlanType): number {
+  return getPricingTiers()[plan].filesPerMonth;
+}
+
+// Helper function to get files limit for a specific user (accounts for grandfathering)
+export function getFilesLimitForUser(plan: PlanType, isGrandfatheredBasic?: boolean): number {
+  // Legacy Basic users keep their 150 files/month
+  if (plan === 'basic' && isGrandfatheredBasic === true) {
+    return 150; // Legacy limit
+  }
+  // All other users get the default limit for their plan
   return getPricingTiers()[plan].filesPerMonth;
 }
 
