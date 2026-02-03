@@ -27,6 +27,24 @@ export interface OCRResult {
   pageCount: number;
 }
 
+export interface OCRTextElement {
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+}
+
+export interface OCRPageResult {
+  pageNumber: number;
+  elements: OCRTextElement[];
+  width: number;
+  height: number;
+  imageWidth: number;
+  imageHeight: number;
+}
+
 export class GoogleVisionOCRService {
   private client: InstanceType<typeof vision.ImageAnnotatorClient> | null = null;
   private enabled: boolean = false;
@@ -107,6 +125,103 @@ export class GoogleVisionOCRService {
       console.error('Google Vision API error:', error);
       // Don't crash - return empty string so fallback can handle it
       return '';
+    }
+  }
+
+  /**
+   * Extract text WITH coordinates from a single image using Google Vision
+   * Returns word-level bounding boxes for use in manual extraction
+   */
+  async extractTextWithCoordinates(imageBuffer: Buffer, pageNumber: number = 1): Promise<OCRPageResult> {
+    if (!this.client) {
+      throw new Error('Google Vision client not initialized');
+    }
+
+    try {
+      console.log(`🔍 Running Google Vision OCR with coordinate extraction...`);
+
+      // Use document text detection (optimized for dense text like bank statements)
+      const [result] = await this.client.documentTextDetection({
+        image: { content: imageBuffer },
+      });
+
+      const fullTextAnnotation = result.fullTextAnnotation;
+      if (!fullTextAnnotation || !fullTextAnnotation.pages || fullTextAnnotation.pages.length === 0) {
+        console.log('⚠️  Google Vision returned no text for image');
+        return {
+          pageNumber,
+          elements: [],
+          width: 0,
+          height: 0,
+          imageWidth: 0,
+          imageHeight: 0,
+        };
+      }
+
+      const elements: OCRTextElement[] = [];
+      const page = fullTextAnnotation.pages[0]; // Single image = single page
+      const pageWidth = page.width || 0;
+      const pageHeight = page.height || 0;
+
+      // Parse word-level bounding boxes
+      for (const block of page.blocks || []) {
+        for (const paragraph of block.paragraphs || []) {
+          for (const word of paragraph.words || []) {
+            // Get the word text from symbols
+            const wordText = (word.symbols || []).map(s => s.text).join('');
+
+            if (!wordText.trim()) continue;
+
+            // Get bounding box vertices
+            const vertices = word.boundingBox?.vertices || [];
+            if (vertices.length < 4) continue;
+
+            // Calculate bounding box dimensions
+            // vertices[0] = top-left, vertices[1] = top-right, vertices[2] = bottom-right, vertices[3] = bottom-left
+            const x = vertices[0].x || 0;
+            const y = vertices[0].y || 0;
+            const x2 = vertices[1].x || vertices[2].x || 0;
+            const y2 = vertices[2].y || vertices[3].y || 0;
+            const width = x2 - x;
+            const height = y2 - y;
+
+            // Get confidence (0-1 scale, convert to 0-100)
+            const confidence = (word.confidence || 0) * 100;
+
+            elements.push({
+              text: wordText,
+              x,
+              y,
+              width: Math.max(width, 1), // Ensure positive width
+              height: Math.max(height, 1), // Ensure positive height
+              confidence,
+            });
+          }
+        }
+      }
+
+      console.log(`✅ Google Vision OCR found ${elements.length} text elements`);
+      console.log(`   Image dimensions: ${pageWidth}x${pageHeight} pixels`);
+
+      return {
+        pageNumber,
+        elements,
+        width: pageWidth,
+        height: pageHeight,
+        imageWidth: pageWidth,
+        imageHeight: pageHeight,
+      };
+    } catch (error) {
+      console.error('Google Vision API error:', error);
+      // Return empty result on error
+      return {
+        pageNumber,
+        elements: [],
+        width: 0,
+        height: 0,
+        imageWidth: 0,
+        imageHeight: 0,
+      };
     }
   }
 

@@ -5,6 +5,8 @@
 
 import { PDFCoordinateExtractor, TextElement, TextRow } from './pdfCoordinateExtractor.js';
 import { Transaction } from '../types/index.js';
+import { googleVisionOCRService, OCRPageResult } from './googleVisionOCR.js';
+import { convertPDFToImagesAuto } from '../utils/pdfToImage.js';
 
 export interface ColumnDefinition {
   xStart: number;
@@ -111,7 +113,7 @@ export class RegionExtractor {
     console.log(`   Image-to-PDF scale factor: ${imageToPointsScale.toFixed(4)}`);
 
     // Scale region coordinates from image space to PDF point space
-    let scaledRegion = region
+    const scaledRegion = region
       ? {
           x: region.x * imageToPointsScale,
           y: region.y * imageToPointsScale,
@@ -190,6 +192,19 @@ export class RegionExtractor {
 
     // Group elements by page
     const elementsByPage = this.groupByPage(filteredElements);
+
+    // Ensure all requested pages are in the map (even if they have 0 elements)
+    // This allows us to detect scanned pages and trigger OCR
+    const requestedPages = pages === 'all'
+      ? Array.from({ length: pdfDimensions.length }, (_, i) => i + 1)
+      : pages;
+
+    for (const pageNum of requestedPages) {
+      if (!elementsByPage.has(pageNum)) {
+        elementsByPage.set(pageNum, []); // Add empty array for pages with no text
+      }
+    }
+
     const pageResults: ManualExtractionResult['pageResults'] = [];
     const allTransactions: Transaction[] = [];
     let totalRows = 0;
@@ -198,6 +213,68 @@ export class RegionExtractor {
     // Process each page
     for (const [pageNumber, pageElements] of elementsByPage.entries()) {
       console.log(`\n📄 Processing page ${pageNumber} (${pageElements.length} elements)`);
+
+      // Check if this page needs OCR fallback (scanned page with no text)
+      if (this.shouldUseOCR(pageElements, pageNumber)) {
+        // Check if Google Vision is available
+        if (!googleVisionOCRService.isEnabled()) {
+          console.log(`   ❌ Google Vision OCR not configured - cannot extract from scanned page`);
+          console.log(`   → Configure GOOGLE_APPLICATION_CREDENTIALS or GOOGLE_VISION_API_KEY to enable OCR`);
+
+          // Continue with empty page (will result in 0 transactions for this page)
+          pageResults.push({
+            page: pageNumber,
+            rowCount: 0,
+            transactionCount: 0,
+          });
+          continue;
+        }
+
+        try {
+          console.log(`   🔍 Running Google Vision OCR fallback...`);
+          const startTime = Date.now();
+
+          // Extract this page as an image
+          const pageImageBuffer = await this.extractPageAsImage(pdfBuffer, pageNumber);
+
+          // Run Google Vision OCR with coordinate extraction
+          const ocrResult = await googleVisionOCRService.extractTextWithCoordinates(
+            pageImageBuffer,
+            pageNumber
+          );
+
+          // Get PDF dimensions for coordinate conversion
+          const pageDims = pdfDimensions[pageNumber - 1];
+
+          // Convert OCR results to TextElement format (image coords → PDF coords)
+          const syntheticElements = this.convertOCRToTextElements(
+            ocrResult,
+            pageNumber,
+            pageDims
+          );
+
+          const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+          console.log(`   ✅ OCR completed in ${duration}s`);
+          console.log(`   💰 Cost: ~$${(0.0015).toFixed(4)} (1 page)`);
+
+          // Replace empty page elements with OCR results
+          elementsByPage.set(pageNumber, syntheticElements);
+          pageElements.length = 0;
+          pageElements.push(...syntheticElements);
+
+        } catch (ocrError) {
+          console.error(`   ❌ OCR failed for page ${pageNumber}:`, ocrError);
+          console.log(`   → Continuing with empty elements (0 transactions will be extracted)`);
+
+          // Continue with empty page
+          pageResults.push({
+            page: pageNumber,
+            rowCount: 0,
+            transactionCount: 0,
+          });
+          continue;
+        }
+      }
 
       let dataRows: TextRow[];
 
@@ -405,7 +482,7 @@ export class RegionExtractor {
         // Find "Date" and extract the value after it (e.g., "01 Aug 25")
         if (elements[i] === 'Date' && !date) {
           // Collect the next 3 non-empty tokens (e.g., "01", "Aug", "25")
-          let dateParts = [];
+          const dateParts = [];
           for (let j = i + 1; j < elements.length && dateParts.length < 3; j++) {
             const val = elements[j].replace(/[,."]/g, '');
             if (val && val !== 'Description' && !val.includes('(£)')) {
@@ -417,7 +494,7 @@ export class RegionExtractor {
 
         // Find "Description" and extract until "Type"
         else if (elements[i] === 'Description' && !description) {
-          let desc = [];
+          const desc = [];
           for (let j = i + 1; j < elements.length; j++) {
             if (elements[j] === 'Type' || elements[j].includes('(£)')) break;
             const val = elements[j].replace(/[,."]/g, '');
@@ -520,9 +597,21 @@ export class RegionExtractor {
    */
   private extractCellText(elements: TextElement[], column: ColumnDefinition, debug = false, color = ''): string {
     // Find all text elements within the column's X range
-    const cellElements = elements.filter(
-      (el) => el.x >= column.xStart && el.x <= column.xEnd
-    );
+    // Check both start position AND ensure element doesn't extend too far beyond column boundary
+    const cellElements = elements.filter((el) => {
+      const elementStart = el.x;
+      const elementEnd = el.x + (el.width || 0);
+
+      // Element must start within or very close to column
+      const startsInColumn = elementStart >= column.xStart && elementStart <= column.xEnd;
+
+      // Element shouldn't extend too far beyond column boundary
+      // Allow some tolerance (10 points) for minor overlap
+      const tolerance = 10;
+      const endsReasonably = elementEnd <= column.xEnd + tolerance;
+
+      return startsInColumn && endsReasonably;
+    });
 
     if (debug && cellElements.length > 0) {
       console.log(`      ${color} Column "${column.label}" [X: ${column.xStart.toFixed(2)}-${column.xEnd.toFixed(2)}]:`);
@@ -548,6 +637,25 @@ export class RegionExtractor {
         // Keep only numeric values or "blank" indicators
         // Handle formats: -£45.94, +£45.94, £45.94, -45.94, 45.94
         return text === 'blank.' || text === '' || /^[+-]?[£$€]?[\d,.\s-]+$/.test(text);
+      }
+
+      // For type column, only keep valid transaction type codes
+      if (column.label === 'type') {
+        // Exclude column header
+        if (text.match(/^Type$/i)) {
+          return false;
+        }
+        // Exclude standalone periods and commas
+        if (text === '.' || text === ',') {
+          return false;
+        }
+        // Only keep text that looks like a valid transaction type
+        // Valid types are short codes (2-4 letters/numbers) or specific keywords
+        const isValid = this.isValidTransactionType(text);
+        if (!isValid && debug) {
+          console.log(`        ⚠️  Rejecting invalid type: "${text}" (likely part of description)`);
+        }
+        return isValid;
       }
 
       return true;
@@ -630,6 +738,74 @@ export class RegionExtractor {
       amountIn: amountIn !== undefined ? amountIn : undefined,
       amountOut: amountOut !== undefined ? amountOut : undefined,
     };
+  }
+
+  /**
+   * Check if a text string is a valid transaction type code
+   * Rejects common description words like "FROM", "TO", "VIA", etc.
+   * Allows: CREDIT, DEBIT, BALANCE, N/A, or short transaction codes
+   */
+  private isValidTransactionType(text: string): boolean {
+    if (!text || text.length === 0) return false;
+
+    const upper = text.toUpperCase().trim();
+
+    // Allow N/A or NA (common placeholder for missing type)
+    if (upper === 'N/A' || upper === 'NA' || upper === 'N.A.' || upper === 'N.A') {
+      return true;
+    }
+
+    // Allow BALANCE (sometimes used as a type)
+    if (upper === 'BALANCE' || upper === 'BAL') {
+      return true;
+    }
+
+    // Reject common description words that appear in type columns
+    const descriptionWords = [
+      'FROM', 'TO', 'VIA', 'AT', 'FOR', 'WITH', 'AND', 'THE', 'OF',
+      'ON', 'BY', 'AS', 'AN', 'OR', 'IF', 'NO', 'REF',
+      'REFERENCE', 'NUMBER', 'DATE', 'TIME', 'ACCOUNT', 'A/C'
+    ];
+
+    if (descriptionWords.includes(upper)) {
+      return false;
+    }
+
+    // Reject words that are too long (types are usually 2-4 chars)
+    // But allow some longer specific keywords
+    const allowedLongTypes = [
+      'DEBIT', 'CREDIT', 'TRANSFER', 'WITHDRAWAL', 'DEPOSIT',
+      'PAYMENT', 'REFUND', 'INTEREST', 'FEE', 'CHARGE', 'BALANCE'
+    ];
+
+    if (text.length > 8 && !allowedLongTypes.includes(upper)) {
+      return false;
+    }
+
+    // Valid transaction type patterns:
+    // 1. Short codes (2-4 uppercase letters/numbers): DR, CR, FPO, DEB, TFR, ATM, POS, SO, DD, BGC, CHQ, FPI
+    // 2. Specific keywords: DEBIT, CREDIT, TRANSFER, etc.
+
+    // Pattern 1: Short codes (2-4 chars, mostly letters)
+    if (/^[A-Z0-9]{2,4}$/.test(upper)) {
+      return true;
+    }
+
+    // Pattern 2: Known type keywords (case insensitive)
+    const validTypes = [
+      'DR', 'CR', 'DEB', 'DEBIT', 'CREDIT', 'IN', 'OUT',
+      'FPO', 'FPI', 'TFR', 'TRANSFER',
+      'DD', 'SO', 'ATM', 'POS',
+      'BGC', 'CHQ', 'DEP', 'DEPOSIT',
+      'WD', 'WITHDRAWAL',
+      'PAY', 'PAYMENT',
+      'REF', 'REFUND',
+      'INT', 'INTEREST',
+      'FEE', 'CHARGE',
+      'BAL', 'BALANCE'
+    ];
+
+    return validTypes.includes(upper);
   }
 
   /**
@@ -840,5 +1016,95 @@ export class RegionExtractor {
       height: el.height * pointsToImageScale,
       text: el.text,
     }));
+  }
+
+  /**
+   * Check if a page should use OCR fallback
+   * Returns true if page has very few or no text elements
+   */
+  private shouldUseOCR(pageElements: TextElement[], pageNumber: number): boolean {
+    const threshold = 5; // Less than 5 elements = likely scanned page
+
+    if (pageElements.length < threshold) {
+      console.log(`⚠️  Page ${pageNumber} has only ${pageElements.length} text elements (threshold: ${threshold})`);
+      console.log(`   → This page appears to be scanned/image-based`);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Extract a single page from PDF as an image buffer
+   * Used for OCR fallback when page has no text elements
+   */
+  private async extractPageAsImage(pdfBuffer: Buffer, pageNumber: number): Promise<Buffer> {
+    console.log(`📄 Converting page ${pageNumber} to image for OCR...`);
+
+    try {
+      // Convert PDF to images using existing utility
+      // We convert all pages but only use the one we need
+      const imageBuffers = await convertPDFToImagesAuto(pdfBuffer, {
+        dpi: 300, // High DPI for better OCR accuracy
+        format: 'png',
+        maxPages: pageNumber, // Only convert up to the page we need
+      });
+
+      if (pageNumber > imageBuffers.length) {
+        throw new Error(`Page ${pageNumber} not found in PDF (total pages: ${imageBuffers.length})`);
+      }
+
+      const imageBuffer = imageBuffers[pageNumber - 1]; // Convert to 0-based index
+      console.log(`   ✅ Converted page ${pageNumber} to image (${imageBuffer.length} bytes)`);
+
+      return imageBuffer;
+    } catch (error) {
+      console.error(`Failed to extract page ${pageNumber} as image:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Convert OCR results (with coordinates in image space) to TextElement format
+   * Scales coordinates from image DPI (300) to PDF points (72)
+   */
+  private convertOCRToTextElements(
+    ocrResult: OCRPageResult,
+    pageNumber: number,
+    pdfPageDimensions: { width: number; height: number }
+  ): TextElement[] {
+    console.log(`📏 Converting OCR coordinates to PDF coordinate system...`);
+    console.log(`   OCR image dimensions: ${ocrResult.imageWidth}x${ocrResult.imageHeight}`);
+    console.log(`   PDF page dimensions: ${pdfPageDimensions.width.toFixed(2)}x${pdfPageDimensions.height.toFixed(2)} points`);
+
+    // OCR coordinates are in image pixels (300 DPI from our conversion)
+    // PDF coordinates are in points (72 DPI)
+    // Scale factor: PDF points / Image pixels
+    const scaleX = pdfPageDimensions.width / ocrResult.imageWidth;
+    const scaleY = pdfPageDimensions.height / ocrResult.imageHeight;
+
+    console.log(`   Scale factors: X=${scaleX.toFixed(4)}, Y=${scaleY.toFixed(4)}`);
+
+    // Convert each OCR element to TextElement format
+    const textElements: TextElement[] = ocrResult.elements.map((ocrEl) => ({
+      text: ocrEl.text,
+      x: ocrEl.x * scaleX,
+      y: ocrEl.y * scaleY,
+      width: ocrEl.width * scaleX,
+      height: ocrEl.height * scaleY,
+      pageNumber: pageNumber,
+    }));
+
+    console.log(`   ✅ Converted ${textElements.length} OCR elements to PDF coordinates`);
+
+    // Log a few sample elements for debugging
+    if (textElements.length > 0) {
+      console.log(`   Sample elements (first 3):`);
+      textElements.slice(0, 3).forEach((el, i) => {
+        console.log(`     [${i}] "${el.text}" at X:${el.x.toFixed(2)}, Y:${el.y.toFixed(2)}`);
+      });
+    }
+
+    return textElements;
   }
 }
