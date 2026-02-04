@@ -257,7 +257,8 @@ export function logConversionMiddleware(req: Request, res: Response, next: NextF
           console.log(`Logged conversion: ${fileName} (${pagesConverted} pages) for user ${userId}`);
 
           // Check if user just hit their limit and send email (Priority 3)
-          if (result.userHitLimit && result.userEmail) {
+          // Skip anonymous users
+          if (result.userHitLimit && result.userEmail && !result.userEmail.includes('@anonymous.local')) {
             console.log(`🚀 User ${userId} hit their limit - sending limit hit email`);
             brevoEmailService.sendLimitHitEmail(result.userEmail, result.userName).catch(err => {
               console.error('Failed to send limit hit email:', err);

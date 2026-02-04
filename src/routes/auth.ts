@@ -36,15 +36,18 @@ router.post('/register', async (req: Request, res: Response) => {
     });
 
     // Send welcome email (Priority 1) - Don't wait for it
-    brevoEmailService.sendWelcomeEmail(user.email, user.name).catch(error => {
-      console.error('Failed to send welcome email:', error);
-      // Don't fail registration if email fails
-    });
+    // Skip anonymous users
+    if (!user.email.includes('@anonymous.local')) {
+      brevoEmailService.sendWelcomeEmail(user.email, user.name).catch(error => {
+        console.error('Failed to send welcome email:', error);
+        // Don't fail registration if email fails
+      });
 
-    // Mark welcome email as sent
-    db.updateUser(user.id, { welcome_email_sent: true }).catch(error => {
-      console.error('Failed to update welcome_email_sent flag:', error);
-    });
+      // Mark welcome email as sent
+      db.updateUser(user.id, { welcome_email_sent: true }).catch(error => {
+        console.error('Failed to update welcome_email_sent flag:', error);
+      });
+    }
 
     // Generate JWT token
     const token = jwt.sign(
@@ -222,14 +225,17 @@ router.post('/google', async (req: Request, res: Response) => {
       });
 
       // Send welcome email (Priority 1) for new Google OAuth users
-      brevoEmailService.sendWelcomeEmail(user.email, user.name).catch(error => {
-        console.error('Failed to send welcome email:', error);
-      });
+      // Skip anonymous users
+      if (!user.email.includes('@anonymous.local')) {
+        brevoEmailService.sendWelcomeEmail(user.email, user.name).catch(error => {
+          console.error('Failed to send welcome email:', error);
+        });
 
-      // Mark welcome email as sent
-      db.updateUser(user.id, { welcome_email_sent: true }).catch(error => {
-        console.error('Failed to update welcome_email_sent flag:', error);
-      });
+        // Mark welcome email as sent
+        db.updateUser(user.id, { welcome_email_sent: true }).catch(error => {
+          console.error('Failed to update welcome_email_sent flag:', error);
+        });
+      }
     }
 
     // Generate JWT token
