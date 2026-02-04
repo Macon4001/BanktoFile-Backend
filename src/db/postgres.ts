@@ -22,6 +22,7 @@ export interface User {
   google_id?: string;
   picture?: string;
   is_grandfathered_basic?: boolean; // TRUE = legacy 150 files/month, FALSE/NULL = new 30 files/month
+  billing_interval?: 'monthly' | 'yearly'; // Billing cycle frequency
 
   // Email tracking fields
   welcome_email_sent?: boolean;

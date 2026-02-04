@@ -9,7 +9,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-pro
 // Create Checkout Session
 router.post('/create-checkout-session', async (req: Request, res: Response) => {
   try {
-    const { plan, email, userId } = req.body;
+    const { plan, email, userId, billingInterval = 'monthly' } = req.body;
 
     if (!plan || !email) {
       return res.status(400).json({ error: 'Plan and email are required' });
@@ -20,7 +20,21 @@ router.post('/create-checkout-session', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid plan selected' });
     }
 
+    // Validate billing interval
+    if (!['monthly', 'yearly'].includes(billingInterval)) {
+      return res.status(400).json({ error: 'Invalid billing interval' });
+    }
+
     const planDetails = PRICING_TIERS[plan as PlanType];
+
+    // Select the correct price ID based on billing interval
+    const priceId = billingInterval === 'yearly'
+      ? ('yearlyPriceId' in planDetails ? planDetails.yearlyPriceId : null)
+      : planDetails.priceId;
+
+    if (!priceId) {
+      return res.status(400).json({ error: 'Price ID not configured for selected plan and billing interval' });
+    }
 
     // Create or get user
     let user = userId ? await db.getUserById(userId) : await db.getUserByEmail(email);
@@ -34,7 +48,7 @@ router.post('/create-checkout-session', async (req: Request, res: Response) => {
       payment_method_types: ['card'],
       line_items: [
         {
-          price: planDetails.priceId!,
+          price: priceId,
           quantity: 1,
         },
       ],
@@ -43,6 +57,7 @@ router.post('/create-checkout-session', async (req: Request, res: Response) => {
       metadata: {
         userId: user.id,
         plan: plan,
+        billingInterval: billingInterval,
       },
       success_url: `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL}/pricing?canceled=true`,
@@ -50,6 +65,7 @@ router.post('/create-checkout-session', async (req: Request, res: Response) => {
         metadata: {
           userId: user.id,
           plan: plan,
+          billingInterval: billingInterval,
         },
       },
     });
@@ -75,7 +91,7 @@ router.post('/create-portal-session', async (req: Request, res: Response) => {
 
     try {
       decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string };
-    } catch (err) {
+    } catch {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
@@ -103,6 +119,7 @@ router.post('/create-portal-session', async (req: Request, res: Response) => {
 
       console.log(`Portal session created successfully: ${session.id}`);
       return res.json({ url: session.url });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (stripeError: any) {
       // Stripe-specific error handling
       if (stripeError.type === 'StripeInvalidRequestError') {

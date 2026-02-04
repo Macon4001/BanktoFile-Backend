@@ -96,6 +96,7 @@ async function handleCheckoutComplete(session: any) {
 
     const userId = session.metadata?.userId || session.client_reference_id;
     const plan = session.metadata?.plan as PlanType;
+    const billingInterval = session.metadata?.billingInterval || 'monthly';
 
     if (!userId || !plan) {
       console.error('[WEBHOOK] Missing userId or plan in checkout session');
@@ -108,7 +109,7 @@ async function handleCheckoutComplete(session: any) {
       return;
     }
 
-    console.log('[WEBHOOK] Found user:', user.email, 'plan:', plan);
+    console.log('[WEBHOOK] Found user:', user.email, 'plan:', plan, 'billing:', billingInterval);
 
     // Fetch the subscription to get period dates
     let periodStart: Date | undefined;
@@ -144,11 +145,12 @@ async function handleCheckoutComplete(session: any) {
       files_used_monthly: 0, // Reset file usage on new purchase
       subscription_status: 'active',
       is_grandfathered_basic: false, // New subscribers are not grandfathered
+      billing_interval: billingInterval as 'monthly' | 'yearly',
       ...(periodStart && { current_period_start: periodStart }),
       ...(periodEnd && { current_period_end: periodEnd }),
     });
 
-    console.log(`[WEBHOOK] ✅ Checkout completed for user ${userId}, plan: ${plan}, limit: ${filesLimit} files`);
+    console.log(`[WEBHOOK] ✅ Checkout completed for user ${userId}, plan: ${plan}, billing: ${billingInterval}, limit: ${filesLimit} files`);
   } catch (error) {
     console.error('[WEBHOOK] ❌ Error in handleCheckoutComplete:', error);
     throw error;
@@ -163,6 +165,7 @@ async function handleSubscriptionUpdate(subscription: any) {
 
     const userId = subscription.metadata?.userId;
     const plan = subscription.metadata?.plan as PlanType;
+    const billingInterval = subscription.metadata?.billingInterval || 'monthly';
 
     if (!userId) {
       console.error('[WEBHOOK] Missing userId in subscription metadata');
@@ -180,7 +183,7 @@ async function handleSubscriptionUpdate(subscription: any) {
       return;
     }
 
-    console.log('[WEBHOOK] Found user:', user.email, 'plan:', plan);
+    console.log('[WEBHOOK] Found user:', user.email, 'plan:', plan, 'billing:', billingInterval);
 
     // Extract period dates - Stripe uses unix timestamps (seconds)
     // Get the first subscription item's period
@@ -201,6 +204,7 @@ async function handleSubscriptionUpdate(subscription: any) {
       subscription_status: subscription.status as 'active' | 'canceled' | 'past_due' | 'trialing' | 'incomplete' | 'incomplete_expired' | 'unpaid',
       plan: plan,
       monthly_files_limit: filesLimit, // Respects grandfathering
+      billing_interval: billingInterval as 'monthly' | 'yearly',
     };
 
     // Only add dates if they exist and are valid numbers
@@ -215,7 +219,7 @@ async function handleSubscriptionUpdate(subscription: any) {
 
     await db.updateUser(userId, updateData);
 
-    console.log(`[WEBHOOK] ✅ Subscription updated for user ${userId}, plan: ${plan}`);
+    console.log(`[WEBHOOK] ✅ Subscription updated for user ${userId}, plan: ${plan}, billing: ${billingInterval}`);
   } catch (error) {
     console.error('[WEBHOOK] ❌ Error in handleSubscriptionUpdate:', error);
     throw error;

@@ -47,7 +47,9 @@ export function getPricingTiers() {
       filesPerMonth: 30, // New subscribers get 30 files/month (legacy users get 150 via is_grandfathered_basic)
       maxPagesPerFile: 20,
       price: 20,
+      yearlyPrice: 200, // £200/year (£16.67/month - 17% off)
       priceId: process.env.STRIPE_BASIC_PRICE_ID || 'price_basic',
+      yearlyPriceId: process.env.STRIPE_BASIC_YEARLY_PRICE_ID || 'price_basic_yearly',
       features: [
         '30 files per month',
         'Up to 20 pages per file',
@@ -61,7 +63,9 @@ export function getPricingTiers() {
       filesPerMonth: 400,
       maxPagesPerFile: 50,
       price: 40,
+      yearlyPrice: 400, // £400/year (£33.33/month - 17% off)
       priceId: process.env.STRIPE_STARTER_PRICE_ID || 'price_starter',
+      yearlyPriceId: process.env.STRIPE_STARTER_YEARLY_PRICE_ID || 'price_starter_yearly',
       features: [
         '400 files per month',
         'Up to 50 pages per file',
@@ -75,7 +79,9 @@ export function getPricingTiers() {
       filesPerMonth: 1000,
       maxPagesPerFile: 100,
       price: 60,
+      yearlyPrice: 600, // £600/year (£50/month - 17% off)
       priceId: process.env.STRIPE_PROFESSIONAL_PRICE_ID || 'price_professional',
+      yearlyPriceId: process.env.STRIPE_PROFESSIONAL_YEARLY_PRICE_ID || 'price_professional_yearly',
       features: [
         '1,000 files per month',
         'Up to 100 pages per file',
@@ -89,7 +95,9 @@ export function getPricingTiers() {
       filesPerMonth: 4000,
       maxPagesPerFile: -1, // -1 means unlimited
       price: 99,
+      yearlyPrice: 990, // £990/year (£82.50/month - 17% off)
       priceId: process.env.STRIPE_ENTERPRISE_PRICE_ID || 'price_enterprise',
+      yearlyPriceId: process.env.STRIPE_ENTERPRISE_YEARLY_PRICE_ID || 'price_enterprise_yearly',
       features: [
         '4,000 files per month',
         'Unlimited pages per file',
