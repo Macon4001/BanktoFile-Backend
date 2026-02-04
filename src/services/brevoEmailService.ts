@@ -559,44 +559,142 @@ View all feedback: ${this.frontendUrl}/admin/feedback
 <html>
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; color: #333; }
-    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-    .header { background: #fef3c7; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-    .content { background: #fff; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px; }
-    .field { margin: 15px 0; }
-    .label { font-weight: 600; color: #6b7280; }
-    .value { margin-top: 5px; }
-    .message { background: #f9fafb; padding: 15px; border-left: 4px solid #f59e0b; margin-top: 10px; white-space: pre-wrap; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      line-height: 1.5;
+      color: #1f2937;
+      margin: 0;
+      padding: 0;
+      background-color: #f9fafb;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .header {
+      background: #10b981;
+      color: white;
+      padding: 24px 20px;
+      text-align: center;
+    }
+    .header h2 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .content {
+      padding: 24px 20px;
+    }
+    .info-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .info-item {
+      background: #f9fafb;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border-left: 3px solid #10b981;
+    }
+    .label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .value {
+      color: #1f2937;
+      font-size: 14px;
+      word-break: break-word;
+    }
+    .message-box {
+      background: #fffbeb;
+      padding: 16px;
+      border-radius: 8px;
+      border-left: 3px solid #f59e0b;
+      margin: 16px 0;
+    }
+    .message-box .value {
+      white-space: pre-wrap;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .button {
+      display: inline-block;
+      background: #10b981;
+      color: white;
+      padding: 12px 24px;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: 500;
+      font-size: 14px;
+      margin-top: 16px;
+    }
+    .footer {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid #e5e7eb;
+      font-size: 13px;
+      color: #6b7280;
+    }
+    @media only screen and (max-width: 600px) {
+      .container { padding: 12px; }
+      .content { padding: 20px 16px; }
+      .header { padding: 20px 16px; }
+      .header h2 { font-size: 18px; }
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="header">
-      <h2 style="margin: 0;">🎫 New Support Request</h2>
-    </div>
-    <div class="content">
-      <div class="field">
-        <div class="label">From:</div>
-        <div class="value">${userName || 'Unknown'} (${userEmail})</div>
+    <div class="card">
+      <div class="header">
+        <h2>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+          New Support Request
+        </h2>
       </div>
-      <div class="field">
-        <div class="label">Subject:</div>
-        <div class="value"><strong>${subject}</strong></div>
-      </div>
-      <div class="field">
-        <div class="label">Message:</div>
-        <div class="message">${message}</div>
-      </div>
-      <div class="field" style="margin-top: 20px;">
-        <a href="${this.frontendUrl}/admin/support" style="display: inline-block; background: #f59e0b; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px;">
-          View Support Requests →
-        </a>
-      </div>
-      <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e5e7eb;">
-        <p style="margin: 0; font-size: 14px; color: #6b7280;">
-          <strong>Reply to:</strong> ${userEmail}
-        </p>
+      <div class="content">
+        <div class="info-grid">
+          <div class="info-item">
+            <div class="label">From</div>
+            <div class="value">${userName || 'Unknown'} <br><a href="mailto:${userEmail}" style="color: #10b981; text-decoration: none;">${userEmail}</a></div>
+          </div>
+          <div class="info-item">
+            <div class="label">Subject</div>
+            <div class="value"><strong>${subject}</strong></div>
+          </div>
+        </div>
+
+        <div class="message-box">
+          <div class="label">Message</div>
+          <div class="value">${message}</div>
+        </div>
+
+        <div style="text-align: center;">
+          <a href="${this.frontendUrl}/admin/support" class="button">View in Dashboard</a>
+        </div>
+
+        <div class="footer">
+          Reply directly to <strong>${userEmail}</strong>
+        </div>
       </div>
     </div>
   </div>
@@ -605,7 +703,7 @@ View all feedback: ${this.frontendUrl}/admin/feedback
     `;
 
     const textContent = `
-🎫 New Support Request
+New Support Request
 
 From: ${userName || 'Unknown'} (${userEmail})
 Subject: ${subject}
@@ -639,39 +737,123 @@ View all support requests: ${this.frontendUrl}/admin/support
 <html>
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; color: #333; }
-    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-    .header { background: #dbeafe; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-    .content { background: #fff; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px; }
-    .field { margin: 15px 0; }
-    .label { font-weight: 600; color: #6b7280; }
-    .value { margin-top: 5px; }
-    .message { background: #f9fafb; padding: 15px; border-left: 4px solid #3b82f6; margin-top: 10px; white-space: pre-wrap; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      line-height: 1.5;
+      color: #1f2937;
+      margin: 0;
+      padding: 0;
+      background-color: #f9fafb;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .header {
+      background: #3b82f6;
+      color: white;
+      padding: 24px 20px;
+      text-align: center;
+    }
+    .header h2 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .content {
+      padding: 24px 20px;
+    }
+    .info-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .info-item {
+      background: #f9fafb;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border-left: 3px solid #3b82f6;
+    }
+    .label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .value {
+      color: #1f2937;
+      font-size: 14px;
+      word-break: break-word;
+    }
+    .message-box {
+      background: #eff6ff;
+      padding: 16px;
+      border-radius: 8px;
+      border-left: 3px solid #3b82f6;
+      margin: 16px 0;
+    }
+    .message-box .value {
+      white-space: pre-wrap;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    .footer {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid #e5e7eb;
+      font-size: 13px;
+      color: #6b7280;
+    }
+    @media only screen and (max-width: 600px) {
+      .container { padding: 12px; }
+      .content { padding: 20px 16px; }
+      .header { padding: 20px 16px; }
+      .header h2 { font-size: 18px; }
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="header">
-      <h2 style="margin: 0;">📧 New Contact Form Submission</h2>
-    </div>
-    <div class="content">
-      <div class="field">
-        <div class="label">Name:</div>
-        <div class="value">${name}</div>
+    <div class="card">
+      <div class="header">
+        <h2>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect width="20" height="16" x="2" y="4" rx="2"></rect>
+            <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
+          </svg>
+          New Contact Message
+        </h2>
       </div>
-      <div class="field">
-        <div class="label">Email:</div>
-        <div class="value">${email}</div>
-      </div>
-      <div class="field">
-        <div class="label">Message:</div>
-        <div class="message">${message}</div>
-      </div>
-      <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e5e7eb;">
-        <p style="margin: 0; font-size: 14px; color: #6b7280;">
-          <strong>Reply to:</strong> ${email}
-        </p>
+      <div class="content">
+        <div class="info-grid">
+          <div class="info-item">
+            <div class="label">From</div>
+            <div class="value">${name} <br><a href="mailto:${email}" style="color: #3b82f6; text-decoration: none;">${email}</a></div>
+          </div>
+        </div>
+
+        <div class="message-box">
+          <div class="label">Message</div>
+          <div class="value">${message}</div>
+        </div>
+
+        <div class="footer">
+          Reply directly to <strong>${email}</strong>
+        </div>
       </div>
     </div>
   </div>
@@ -680,7 +862,7 @@ View all support requests: ${this.frontendUrl}/admin/support
     `;
 
     const textContent = `
-📧 New Contact Form Submission
+New Contact Form Submission
 
 Name: ${name}
 Email: ${email}
