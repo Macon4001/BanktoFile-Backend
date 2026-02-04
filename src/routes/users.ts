@@ -167,12 +167,18 @@ router.get('/admin/export-database', requireAdmin, async (_req: Request, res: Re
       markdown += '|-------|------|--------|----------|--------------|-------|\n';
       for (const post of blogPosts) {
         const publishedAt = post.published_at ? new Date(post.published_at).toLocaleDateString() : 'N/A';
-        // Get view count
-        const viewResult = await client.query(
-          'SELECT view_count FROM blog_post_views WHERE blog_post_id = $1',
-          [post.id]
-        );
-        const views = viewResult.rows[0]?.view_count || 0;
+        // Get view count (handle if table doesn't exist)
+        let views = 0;
+        try {
+          const viewResult = await client.query(
+            'SELECT view_count FROM blog_post_views WHERE blog_post_id = $1',
+            [post.id]
+          );
+          views = viewResult.rows[0]?.view_count || 0;
+        } catch {
+          // Table doesn't exist, skip view count
+          views = 0;
+        }
         markdown += `| ${post.title} | ${post.slug} | ${post.status} | ${post.category || 'N/A'} | ${publishedAt} | ${views} |\n`;
       }
       markdown += '\n';
@@ -249,23 +255,28 @@ router.get('/admin/export-database', requireAdmin, async (_req: Request, res: Re
 
       // 10. Support Tickets Summary
       markdown += '## 🎫 Support Tickets\n\n';
-      const supportStats = await client.query(`
-        SELECT
-          status,
-          COUNT(*)::integer as count
-        FROM support_tickets
-        GROUP BY status
-        ORDER BY count DESC
-      `);
-      if (supportStats.rows.length > 0) {
-        markdown += '| Status | Count |\n';
-        markdown += '|--------|-------|\n';
-        supportStats.rows.forEach(stat => {
-          markdown += `| ${stat.status} | ${stat.count} |\n`;
-        });
-        markdown += '\n';
-      } else {
-        markdown += '*No support tickets found*\n\n';
+      try {
+        const supportStats = await client.query(`
+          SELECT
+            status,
+            COUNT(*)::integer as count
+          FROM support_tickets
+          GROUP BY status
+          ORDER BY count DESC
+        `);
+        if (supportStats.rows.length > 0) {
+          markdown += '| Status | Count |\n';
+          markdown += '|--------|-------|\n';
+          supportStats.rows.forEach(stat => {
+            markdown += `| ${stat.status} | ${stat.count} |\n`;
+          });
+          markdown += '\n';
+        } else {
+          markdown += '*No support tickets found*\n\n';
+        }
+      } catch {
+        // Table doesn't exist
+        markdown += '*Support tickets table not found*\n\n';
       }
 
       // Footer
