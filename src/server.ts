@@ -23,6 +23,7 @@ import ipUsageRoutes from "./routes/ipUsage.js";
 import manualExtractRoutes from "./routes/manualExtract.js";
 import { ocrService } from "./services/ocrService.js";
 import { startPublishScheduler } from "./jobs/publishScheduled.js";
+import { startEmailCampaignScheduler } from "./jobs/emailCampaigns.js";
 
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -172,6 +173,9 @@ app.listen(PORT, async () => {
 
   // Start scheduled post publisher
   startPublishScheduler();
+
+  // Start email campaign scheduler
+  startEmailCampaignScheduler();
 });
 
 // Graceful shutdown

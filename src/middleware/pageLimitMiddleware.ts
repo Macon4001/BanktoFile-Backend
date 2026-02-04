@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { db } from '../db/postgres.js';
 import pdf from 'pdf-parse';
 import { getMaxPagesPerFile, getPlanDetails, PlanType } from '../config/stripe.js';
+import { brevoEmailService } from '../services/brevoEmailService.js';
 
 // Extend Express Request to include user info
 declare module 'express-serve-static-core' {
@@ -252,8 +253,21 @@ export function logConversionMiddleware(req: Request, res: Response, next: NextF
 
       if (userId) {
         // Log conversion asynchronously
-        db.logConversion(userId, fileName, pagesConverted).then(() => {
+        db.logConversion(userId, fileName, pagesConverted).then((result) => {
           console.log(`Logged conversion: ${fileName} (${pagesConverted} pages) for user ${userId}`);
+
+          // Check if user just hit their limit and send email (Priority 3)
+          if (result.userHitLimit && result.userEmail) {
+            console.log(`🚀 User ${userId} hit their limit - sending limit hit email`);
+            brevoEmailService.sendLimitHitEmail(result.userEmail, result.userName).catch(err => {
+              console.error('Failed to send limit hit email:', err);
+            });
+
+            // Mark limit hit email as sent
+            db.updateUser(userId, { limit_hit_email_sent: true }).catch(err => {
+              console.error('Failed to update limit_hit_email_sent flag:', err);
+            });
+          }
         }).catch(err => {
           console.error('Error logging conversion:', err);
         });

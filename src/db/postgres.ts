@@ -22,6 +22,15 @@ export interface User {
   google_id?: string;
   picture?: string;
   is_grandfathered_basic?: boolean; // TRUE = legacy 150 files/month, FALSE/NULL = new 30 files/month
+
+  // Email tracking fields
+  welcome_email_sent?: boolean;
+  nudge_email_sent?: boolean;
+  limit_hit_email_sent?: boolean;
+  upgrade_reminder_sent?: boolean;
+  limit_hit_at?: Date;
+  last_conversion_at?: Date;
+
   created_at: Date;
   updated_at: Date;
 
@@ -367,7 +376,7 @@ export class PostgresStore {
     pagesConverted: number,
     conversionType: 'pdf_to_csv' | 'pdf_to_xlsx' = 'pdf_to_csv',
     fileSizeBytes?: number
-  ): Promise<ConversionLog> {
+  ): Promise<ConversionLog & { userHitLimit?: boolean; userEmail?: string; userName?: string }> {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -380,31 +389,69 @@ export class PostgresStore {
         [userId, fileName, pagesConverted, conversionType, fileSizeBytes]
       );
 
-      // Update user's page usage
-      const user = await client.query<User>(
-        'SELECT plan FROM users WHERE id = $1',
+      // Get user details for tracking and limit checking
+      const userResult = await client.query<User>(
+        `SELECT id, email, name, plan, pages_used_today, daily_pages_limit,
+                files_used_monthly, monthly_files_limit, limit_hit_at, limit_hit_email_sent
+         FROM users WHERE id = $1`,
         [userId]
       );
 
-      if (user.rows[0]) {
-        const { plan } = user.rows[0];
+      const user = userResult.rows[0];
+      let userHitLimit = false;
+
+      if (user) {
+        const { plan } = user;
+
         if (plan === 'free') {
           // Free users: increment pages used today (daily limit based on pages)
+          const newPagesUsed = user.pages_used_today + pagesConverted;
           await client.query(
-            'UPDATE users SET pages_used_today = pages_used_today + $1 WHERE id = $2',
+            'UPDATE users SET pages_used_today = pages_used_today + $1, last_conversion_at = NOW() WHERE id = $2',
             [pagesConverted, userId]
           );
+
+          // Check if user just hit their limit
+          if (newPagesUsed >= user.daily_pages_limit && user.pages_used_today < user.daily_pages_limit) {
+            userHitLimit = true;
+            // Mark limit_hit_at timestamp if not already set
+            if (!user.limit_hit_at) {
+              await client.query(
+                'UPDATE users SET limit_hit_at = NOW() WHERE id = $1',
+                [userId]
+              );
+            }
+          }
         } else {
           // Paid users: increment FILES used (monthly limit based on number of files, not pages)
+          const newFilesUsed = user.files_used_monthly + 1;
           await client.query(
-            'UPDATE users SET files_used_monthly = files_used_monthly + 1 WHERE id = $1',
+            'UPDATE users SET files_used_monthly = files_used_monthly + 1, last_conversion_at = NOW() WHERE id = $1',
             [userId]
           );
+
+          // Check if paid user hit their file limit
+          if (newFilesUsed >= user.monthly_files_limit && user.files_used_monthly < user.monthly_files_limit) {
+            userHitLimit = true;
+            if (!user.limit_hit_at) {
+              await client.query(
+                'UPDATE users SET limit_hit_at = NOW() WHERE id = $1',
+                [userId]
+              );
+            }
+          }
         }
       }
 
       await client.query('COMMIT');
-      return logResult.rows[0];
+
+      // Return conversion log with limit hit info for email trigger
+      return {
+        ...logResult.rows[0],
+        userHitLimit: userHitLimit && !user.limit_hit_email_sent, // Only true if email not sent yet
+        userEmail: user?.email,
+        userName: user?.name,
+      };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;

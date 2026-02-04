@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { db } from '../db/postgres.js';
 import { OAuth2Client } from 'google-auth-library';
+import { brevoEmailService } from '../services/brevoEmailService.js';
 
 const router = Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -32,6 +33,17 @@ router.post('/register', async (req: Request, res: Response) => {
     const user = await db.createUser(email, {
       password_hash: hashedPassword,
       name: name || email.split('@')[0],
+    });
+
+    // Send welcome email (Priority 1) - Don't wait for it
+    brevoEmailService.sendWelcomeEmail(user.email, user.name).catch(error => {
+      console.error('Failed to send welcome email:', error);
+      // Don't fail registration if email fails
+    });
+
+    // Mark welcome email as sent
+    db.updateUser(user.id, { welcome_email_sent: true }).catch(error => {
+      console.error('Failed to update welcome_email_sent flag:', error);
     });
 
     // Generate JWT token
@@ -207,6 +219,16 @@ router.post('/google', async (req: Request, res: Response) => {
         name: name || email.split('@')[0],
         google_id: googleId,
         picture,
+      });
+
+      // Send welcome email (Priority 1) for new Google OAuth users
+      brevoEmailService.sendWelcomeEmail(user.email, user.name).catch(error => {
+        console.error('Failed to send welcome email:', error);
+      });
+
+      // Mark welcome email as sent
+      db.updateUser(user.id, { welcome_email_sent: true }).catch(error => {
+        console.error('Failed to update welcome_email_sent flag:', error);
       });
     }
 
