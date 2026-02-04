@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import { db } from '../db/postgres.js';
 import { requireAdmin } from '../middleware/adminAuth.js';
+import { brevoEmailService } from '../services/brevoEmailService.js';
 
 const router = express.Router();
 
@@ -42,6 +43,20 @@ router.post('/feedback', async (req: Request, res: Response) => {
       email: email.trim(),
       bankName: bank_name || null,
     });
+
+    // Send admin notification email (non-blocking)
+    if (!email.trim().includes('@anonymous.local')) {
+      brevoEmailService.sendAdminFeedbackNotification(
+        email.trim(),
+        undefined, // userName not available in feedback form
+        rating as 'positive' | 'negative',
+        bank_name || undefined,
+        comment || undefined
+      ).catch(error => {
+        console.error('Failed to send admin feedback notification:', error);
+        // Don't fail the user operation if notification fails
+      });
+    }
 
     res.json({
       success: true,

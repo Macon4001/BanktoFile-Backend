@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import { brevoEmailService } from '../services/brevoEmailService.js';
 
 const router = Router();
 
@@ -33,15 +34,7 @@ router.post('/', async (req: Request, res: Response) => {
       return;
     }
 
-    // TODO: Implement email sending functionality
-    // Options:
-    // 1. SendGrid
-    // 2. AWS SES
-    // 3. Nodemailer with SMTP
-    // 4. Resend
-    // 5. Store in database for review
-
-    // For now, just log the contact form data
+    // Log the contact form data
     console.log('Contact form submission:', {
       name,
       email,
@@ -50,22 +43,17 @@ router.post('/', async (req: Request, res: Response) => {
       timestamp: new Date().toISOString(),
     });
 
-    // TODO: Store in database (optional)
-    // await db.createContactMessage({ name, email, subject, message });
-
-    // TODO: Send email notification to support team
-    // await sendEmail({
-    //   to: 'Michael@banktofile.com',
-    //   subject: `New Contact Form: ${subject || 'No Subject'}`,
-    //   html: `
-    //     <h2>New Contact Form Submission</h2>
-    //     <p><strong>Name:</strong> ${name}</p>
-    //     <p><strong>Email:</strong> ${email}</p>
-    //     <p><strong>Subject:</strong> ${subject || 'No subject'}</p>
-    //     <p><strong>Message:</strong></p>
-    //     <p>${message}</p>
-    //   `
-    // });
+    // Send admin notification email (non-blocking)
+    if (!email.includes('@anonymous.local')) {
+      brevoEmailService.sendAdminContactNotification(
+        name,
+        email,
+        message
+      ).catch(error => {
+        console.error('Failed to send admin contact notification:', error);
+        // Don't fail the user operation if notification fails
+      });
+    }
 
     res.status(200).json({
       success: true,

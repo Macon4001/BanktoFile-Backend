@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { sendBankRequestAdminEmail, sendBankRequestUserEmail } from '../services/emailService.js';
 import { PostgresStore } from '../db/postgres.js';
+import { brevoEmailService } from '../services/brevoEmailService.js';
 
 const router = Router();
 
@@ -87,6 +88,18 @@ router.post('/', async (req: Request, res: Response) => {
         }
       });
     });
+
+    // Also send admin notification via Brevo (non-blocking)
+    if (!sanitizedEmail.includes('@anonymous.local')) {
+      brevoEmailService.sendAdminBankRequestNotification(
+        sanitizedEmail,
+        undefined, // userName not available in bank request form
+        sanitizedBankName,
+        sanitizedNotes
+      ).catch(error => {
+        console.error('Failed to send admin bank request notification via Brevo:', error);
+      });
+    }
 
     // Return success immediately
     res.status(200).json({

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { supportService } from '../services/supportService.js';
 import { sendSupportRequestEmail } from '../services/emailService.js';
+import { brevoEmailService } from '../services/brevoEmailService.js';
 
 /**
  * Create a new support request (public endpoint)
@@ -51,7 +52,7 @@ export const createSupportRequest = async (req: Request, res: Response) => {
       contextData,
     });
 
-    // Send email notification to admin
+    // Send email notification to admin (using both old and new email service)
     try {
       await sendSupportRequestEmail({
         id: supportRequest.id,
@@ -66,6 +67,18 @@ export const createSupportRequest = async (req: Request, res: Response) => {
     } catch (emailError) {
       console.error('Failed to send support request email:', emailError);
       // Don't fail the request if email fails
+    }
+
+    // Also send admin notification via Brevo (non-blocking)
+    if (!userEmail.includes('@anonymous.local')) {
+      brevoEmailService.sendAdminSupportNotification(
+        userEmail,
+        undefined, // userName not available in support form
+        issueType || 'general',
+        description
+      ).catch(error => {
+        console.error('Failed to send admin support notification via Brevo:', error);
+      });
     }
 
     res.status(201).json({

@@ -23,11 +23,13 @@ export class BrevoEmailService {
   private senderEmail: string;
   private senderName: string;
   private frontendUrl: string;
+  private adminEmail: string;
 
   constructor() {
     this.senderEmail = process.env.SENDER_EMAIL || 'noreply@banktofile.com';
     this.senderName = process.env.SENDER_NAME || 'BankToFile';
     this.frontendUrl = process.env.FRONTEND_URL || 'https://www.banktofile.com';
+    this.adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL || 'michael@banktofile.com';
   }
 
   /**
@@ -450,6 +452,323 @@ The BankToFile Team
       to: userEmail,
       toName: userName,
       subject: 'Still need to convert bank statements?',
+      htmlContent,
+      textContent,
+    });
+  }
+
+  /**
+   * ADMIN NOTIFICATION: User Feedback Received
+   * Notify admin when user submits feedback (positive or negative)
+   */
+  async sendAdminFeedbackNotification(
+    userEmail: string,
+    userName: string | undefined,
+    rating: 'positive' | 'negative',
+    bankName: string | undefined,
+    comment: string | undefined
+  ): Promise<void> {
+    const ratingEmoji = rating === 'positive' ? '👍' : '👎';
+    const ratingText = rating === 'positive' ? 'POSITIVE' : 'NEGATIVE';
+    const ratingColor = rating === 'positive' ? '#10b981' : '#ef4444';
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    .rating { font-size: 24px; font-weight: bold; color: ${ratingColor}; }
+    .content { background: #fff; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px; }
+    .field { margin: 15px 0; }
+    .label { font-weight: 600; color: #6b7280; }
+    .value { margin-top: 5px; }
+    .comment { background: #f9fafb; padding: 15px; border-left: 4px solid ${ratingColor}; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h2 style="margin: 0;">New User Feedback ${ratingEmoji}</h2>
+      <div class="rating">${ratingText} Rating</div>
+    </div>
+    <div class="content">
+      <div class="field">
+        <div class="label">User:</div>
+        <div class="value">${userName || 'Unknown'} (${userEmail})</div>
+      </div>
+      <div class="field">
+        <div class="label">Bank:</div>
+        <div class="value">${bankName || 'Not specified'}</div>
+      </div>
+      <div class="field">
+        <div class="label">Rating:</div>
+        <div class="value">${ratingEmoji} ${ratingText}</div>
+      </div>
+      ${comment ? `
+      <div class="field">
+        <div class="label">Comment:</div>
+        <div class="comment">${comment}</div>
+      </div>
+      ` : ''}
+      <div class="field" style="margin-top: 20px;">
+        <a href="${this.frontendUrl}/admin/feedback" style="display: inline-block; background: #10b981; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px;">
+          View All Feedback →
+        </a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const textContent = `
+New User Feedback ${ratingEmoji}
+
+Rating: ${ratingText}
+User: ${userName || 'Unknown'} (${userEmail})
+Bank: ${bankName || 'Not specified'}
+${comment ? `\nComment:\n${comment}` : ''}
+
+View all feedback: ${this.frontendUrl}/admin/feedback
+    `;
+
+    await this.sendEmail({
+      to: this.adminEmail,
+      subject: `[BankToFile] New ${ratingText} Feedback from ${userEmail}`,
+      htmlContent,
+      textContent,
+    });
+  }
+
+  /**
+   * ADMIN NOTIFICATION: Support Request Received
+   * Notify admin when user submits support request
+   */
+  async sendAdminSupportNotification(
+    userEmail: string,
+    userName: string | undefined,
+    subject: string,
+    message: string
+  ): Promise<void> {
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: #fef3c7; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    .content { background: #fff; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px; }
+    .field { margin: 15px 0; }
+    .label { font-weight: 600; color: #6b7280; }
+    .value { margin-top: 5px; }
+    .message { background: #f9fafb; padding: 15px; border-left: 4px solid #f59e0b; margin-top: 10px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h2 style="margin: 0;">🎫 New Support Request</h2>
+    </div>
+    <div class="content">
+      <div class="field">
+        <div class="label">From:</div>
+        <div class="value">${userName || 'Unknown'} (${userEmail})</div>
+      </div>
+      <div class="field">
+        <div class="label">Subject:</div>
+        <div class="value"><strong>${subject}</strong></div>
+      </div>
+      <div class="field">
+        <div class="label">Message:</div>
+        <div class="message">${message}</div>
+      </div>
+      <div class="field" style="margin-top: 20px;">
+        <a href="${this.frontendUrl}/admin/support" style="display: inline-block; background: #f59e0b; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px;">
+          View Support Requests →
+        </a>
+      </div>
+      <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e5e7eb;">
+        <p style="margin: 0; font-size: 14px; color: #6b7280;">
+          <strong>Reply to:</strong> ${userEmail}
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const textContent = `
+🎫 New Support Request
+
+From: ${userName || 'Unknown'} (${userEmail})
+Subject: ${subject}
+
+Message:
+${message}
+
+Reply to: ${userEmail}
+View all support requests: ${this.frontendUrl}/admin/support
+    `;
+
+    await this.sendEmail({
+      to: this.adminEmail,
+      subject: `[BankToFile Support] ${subject}`,
+      htmlContent,
+      textContent,
+    });
+  }
+
+  /**
+   * ADMIN NOTIFICATION: Contact Form Submission
+   * Notify admin when someone submits contact form
+   */
+  async sendAdminContactNotification(
+    name: string,
+    email: string,
+    message: string
+  ): Promise<void> {
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: #dbeafe; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    .content { background: #fff; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px; }
+    .field { margin: 15px 0; }
+    .label { font-weight: 600; color: #6b7280; }
+    .value { margin-top: 5px; }
+    .message { background: #f9fafb; padding: 15px; border-left: 4px solid #3b82f6; margin-top: 10px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h2 style="margin: 0;">📧 New Contact Form Submission</h2>
+    </div>
+    <div class="content">
+      <div class="field">
+        <div class="label">Name:</div>
+        <div class="value">${name}</div>
+      </div>
+      <div class="field">
+        <div class="label">Email:</div>
+        <div class="value">${email}</div>
+      </div>
+      <div class="field">
+        <div class="label">Message:</div>
+        <div class="message">${message}</div>
+      </div>
+      <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #e5e7eb;">
+        <p style="margin: 0; font-size: 14px; color: #6b7280;">
+          <strong>Reply to:</strong> ${email}
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const textContent = `
+📧 New Contact Form Submission
+
+Name: ${name}
+Email: ${email}
+
+Message:
+${message}
+
+Reply to: ${email}
+    `;
+
+    await this.sendEmail({
+      to: this.adminEmail,
+      subject: `[BankToFile Contact] Message from ${name}`,
+      htmlContent,
+      textContent,
+    });
+  }
+
+  /**
+   * ADMIN NOTIFICATION: Bank Request
+   * Notify admin when user requests support for a new bank
+   */
+  async sendAdminBankRequestNotification(
+    userEmail: string,
+    userName: string | undefined,
+    bankName: string,
+    additionalInfo: string | undefined
+  ): Promise<void> {
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: #fce7f3; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    .content { background: #fff; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px; }
+    .field { margin: 15px 0; }
+    .label { font-weight: 600; color: #6b7280; }
+    .value { margin-top: 5px; }
+    .info { background: #f9fafb; padding: 15px; border-left: 4px solid #ec4899; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h2 style="margin: 0;">🏦 New Bank Support Request</h2>
+    </div>
+    <div class="content">
+      <div class="field">
+        <div class="label">Requested Bank:</div>
+        <div class="value"><strong>${bankName}</strong></div>
+      </div>
+      <div class="field">
+        <div class="label">Requested By:</div>
+        <div class="value">${userName || 'Unknown'} (${userEmail})</div>
+      </div>
+      ${additionalInfo ? `
+      <div class="field">
+        <div class="label">Additional Information:</div>
+        <div class="info">${additionalInfo}</div>
+      </div>
+      ` : ''}
+      <div class="field" style="margin-top: 20px;">
+        <p style="font-size: 14px; color: #6b7280;">
+          Consider adding support for this bank if you see multiple requests.
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const textContent = `
+🏦 New Bank Support Request
+
+Bank: ${bankName}
+Requested By: ${userName || 'Unknown'} (${userEmail})
+${additionalInfo ? `\nAdditional Info:\n${additionalInfo}` : ''}
+
+Consider adding support for this bank if you see multiple requests.
+    `;
+
+    await this.sendEmail({
+      to: this.adminEmail,
+      subject: `[BankToFile] Bank Request: ${bankName}`,
       htmlContent,
       textContent,
     });
