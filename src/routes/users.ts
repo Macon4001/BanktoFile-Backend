@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { requireAdmin } from '../middleware/adminAuth.js';
 import { db, pool } from '../db/postgres.js';
+import { getEmailCampaignStats } from '../jobs/emailCampaigns.js';
 
 const router = Router();
 
@@ -297,6 +298,167 @@ router.get('/admin/export-database', requireAdmin, async (_req: Request, res: Re
     res.status(500).json({
       success: false,
       error: 'Failed to export database data',
+    });
+  }
+});
+
+/**
+ * Get email campaign statistics
+ * Returns summary stats for all email campaigns
+ */
+router.get('/admin/email-campaigns/stats', requireAdmin, async (_req: Request, res: Response) => {
+  try {
+    const stats = await getEmailCampaignStats();
+
+    res.json({
+      success: true,
+      stats,
+    });
+  } catch (error) {
+    console.error('Error fetching email campaign stats:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch email campaign stats',
+    });
+  }
+});
+
+/**
+ * Get users with email campaign status
+ * Query params:
+ *   - emailType: 'all' | 'welcome' | 'nudge' | 'limitHit' | 'upgradeReminder'
+ *   - search: string (email search)
+ *   - limit: number (default: 50)
+ *   - offset: number (default: 0)
+ */
+router.get('/admin/email-campaigns/users', requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const emailType = (req.query.emailType as string) || 'all';
+    const search = req.query.search as string;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const offset = parseInt(req.query.offset as string) || 0;
+
+    let whereClause = "email NOT LIKE '%@anonymous.local'";
+
+    // Filter by email type
+    if (emailType === 'welcome') {
+      whereClause += ' AND welcome_email_sent = true';
+    } else if (emailType === 'nudge') {
+      whereClause += ' AND nudge_email_sent = true';
+    } else if (emailType === 'limitHit') {
+      whereClause += ' AND limit_hit_email_sent = true';
+    } else if (emailType === 'upgradeReminder') {
+      whereClause += ' AND upgrade_reminder_sent = true';
+    }
+
+    // Search by email
+    if (search) {
+      whereClause += ` AND email ILIKE '%${search}%'`;
+    }
+
+    const query = `
+      SELECT
+        id, email, name, plan,
+        welcome_email_sent, nudge_email_sent,
+        limit_hit_email_sent, upgrade_reminder_sent,
+        limit_hit_at, last_conversion_at, created_at,
+        files_used_monthly
+      FROM users
+      WHERE ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT $1 OFFSET $2
+    `;
+
+    const countQuery = `
+      SELECT COUNT(*)::integer as total
+      FROM users
+      WHERE ${whereClause}
+    `;
+
+    const [usersResult, countResult] = await Promise.all([
+      pool.query(query, [limit, offset]),
+      pool.query(countQuery),
+    ]);
+
+    res.json({
+      success: true,
+      users: usersResult.rows,
+      total: countResult.rows[0].total,
+      limit,
+      offset,
+    });
+  } catch (error) {
+    console.error('Error fetching email campaign users:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch email campaign users',
+    });
+  }
+});
+
+/**
+ * Get recent email activity
+ * Returns chronological log of sent emails
+ */
+router.get('/admin/email-campaigns/recent', requireAdmin, async (_req: Request, res: Response) => {
+  try {
+    const query = `
+      WITH email_events AS (
+        SELECT
+          id, email, name, created_at,
+          'welcome' as email_type,
+          created_at as sent_at,
+          welcome_email_sent as was_sent
+        FROM users
+        WHERE welcome_email_sent = true
+
+        UNION ALL
+
+        SELECT
+          id, email, name, created_at,
+          'nudge' as email_type,
+          created_at + INTERVAL '3 days' as sent_at,
+          nudge_email_sent as was_sent
+        FROM users
+        WHERE nudge_email_sent = true
+
+        UNION ALL
+
+        SELECT
+          id, email, name, created_at,
+          'limit_hit' as email_type,
+          limit_hit_at as sent_at,
+          limit_hit_email_sent as was_sent
+        FROM users
+        WHERE limit_hit_email_sent = true AND limit_hit_at IS NOT NULL
+
+        UNION ALL
+
+        SELECT
+          id, email, name, created_at,
+          'upgrade_reminder' as email_type,
+          limit_hit_at + INTERVAL '7 days' as sent_at,
+          upgrade_reminder_sent as was_sent
+        FROM users
+        WHERE upgrade_reminder_sent = true
+      )
+      SELECT * FROM email_events
+      WHERE email NOT LIKE '%@anonymous.local'
+      ORDER BY sent_at DESC
+      LIMIT 100
+    `;
+
+    const result = await pool.query(query);
+
+    res.json({
+      success: true,
+      recent: result.rows,
+    });
+  } catch (error) {
+    console.error('Error fetching recent email activity:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch recent email activity',
     });
   }
 });

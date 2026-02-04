@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { requireAdmin } from '../middleware/adminAuth.js';
 import { supportService } from '../services/supportService.js';
 import { db } from '../db/postgres.js';
+import { getEmailCampaignStats } from '../jobs/emailCampaigns.js';
 
 const router = Router();
 
@@ -12,11 +13,12 @@ const router = Router();
 router.get('/admin/stats', requireAdmin, async (req: Request, res: Response) => {
   try {
     // Fetch all stats in parallel
-    const [supportStats, feedbackSummary, blogPosts, userSummary] = await Promise.all([
+    const [supportStats, feedbackSummary, blogPosts, userSummary, emailStats] = await Promise.all([
       supportService.getSummaryStats(),
       db.getFeedbackSummary('week'),
       db.getAllBlogPosts(undefined, undefined, 'draft'),
       db.getUserAnalyticsSummary(),
+      getEmailCampaignStats(),
     ]);
 
     res.json({
@@ -43,6 +45,13 @@ router.get('/admin/stats', requireAdmin, async (req: Request, res: Response) => 
           totalMrr: userSummary.total_mrr,
           subscribedUsers: userSummary.subscribed_users,
           activeSubscriptions: userSummary.active_subscriptions,
+        },
+        // Email campaigns - show sent/pending emails
+        emailCampaigns: {
+          welcomeSent: emailStats.welcomeEmailsSent,
+          totalSent: emailStats.welcomeEmailsSent + emailStats.nudgeEmailsSent +
+                     emailStats.limitHitEmailsSent + emailStats.upgradeRemindersSent,
+          pendingToSend: emailStats.pendingNudgeEmails + emailStats.pendingUpgradeReminders,
         },
       },
     });
