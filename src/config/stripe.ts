@@ -66,7 +66,7 @@ export function getPricingTiers() {
       name: 'Starter',
       filesPerMonth: 400,
       maxPagesPerFile: 50,
-      maxFileSizeMB: 10,
+      maxFileSizeMB: 25,
       price: 40,
       yearlyPrice: 400, // £400/year (£33.33/month - 17% off)
       priceId: process.env.STRIPE_STARTER_PRICE_ID || 'price_starter',
@@ -74,7 +74,7 @@ export function getPricingTiers() {
       features: [
         '400 files per month',
         'Up to 50 pages per file',
-        'Max 10MB file size',
+        'Max 25MB file size',
         'CSV & XLSX formats',
         'Email support',
         'Secure processing',
