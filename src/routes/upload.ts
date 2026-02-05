@@ -10,6 +10,7 @@ import {
   checkIpRateLimitMiddleware,
   logIpConversionMiddleware,
 } from "../middleware/ipRateLimitMiddleware.js";
+import { checkFileSizeLimitMiddleware } from "../middleware/fileSizeLimitMiddleware.js";
 
 const router = Router();
 const uploadController = new UploadController();
@@ -19,7 +20,7 @@ const storage = multer.memoryStorage();
 const upload = multer({
   storage,
   limits: {
-    fileSize: process.env.NODE_ENV === 'development' ? Infinity : 10 * 1024 * 1024, // Unlimited in dev, 10MB in production
+    fileSize: process.env.NODE_ENV === 'development' ? Infinity : 25 * 1024 * 1024, // Unlimited in dev, 25MB in production
   },
   fileFilter: (_req, file, cb) => {
     const allowedMimeTypes = [
@@ -43,6 +44,7 @@ const upload = multer({
 router.post(
   "/upload",
   upload.single("file"),
+  checkFileSizeLimitMiddleware, // Check file size limit based on user tier
   checkIpRateLimitMiddleware,  // Check IP-based rate limiting first (for anonymous users)
   countPagesMiddleware,
   checkPageLimitMiddleware,
@@ -61,8 +63,9 @@ router.use((err: Error, _req: unknown, res: unknown, next: unknown) => {
 
   if (err instanceof multer.MulterError) {
     if (err.code === "LIMIT_FILE_SIZE") {
-      return response.status(400).json({
-        error: "File size exceeds 10MB limit",
+      return response.status(413).json({
+        error: "File size exceeds 25MB limit",
+        message: "This file is too large. Maximum file size is 25MB.",
       });
     }
     return response.status(400).json({
