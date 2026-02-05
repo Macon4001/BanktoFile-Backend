@@ -3,6 +3,7 @@ import { Transaction, ParsedStatement } from "../types/index.js";
 import { MetroBankCoordinateParser } from "./metroBankCoordinateParser.js";
 import { GenericCoordinateParser } from "./genericCoordinateParser.js";
 import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
+import { WiseCoordinateParser } from "./wiseCoordinateParser.js";
 import { bankDetectionService, BankDetectionResult } from "./bankDetectionService.js";
 import { checkParsingAccuracy, logSanityCheckResult } from "../utils/parsingAccuracyCheck.js";
 
@@ -29,14 +30,17 @@ export class PDFParser {
   private metroBankParser: MetroBankCoordinateParser;
   private genericCoordinateParser: GenericCoordinateParser;
   private hsbcParser: HSBCCoordinateParser;
+  private wiseParser: WiseCoordinateParser;
 
   constructor() {
     this.metroBankParser = new MetroBankCoordinateParser();
     this.genericCoordinateParser = new GenericCoordinateParser();
     this.hsbcParser = new HSBCCoordinateParser();
+    this.wiseParser = new WiseCoordinateParser();
   }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean; bankDetection?: BankDetectionResult }> {
     let text = "";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let data: any;
 
     try {
@@ -48,8 +52,10 @@ export class PDFParser {
       };
 
       try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         data = await (pdfParse as any).default(buffer, parseOptions);
         text = data.text;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (initialError: any) {
         console.error("Initial PDF parse failed:", initialError?.message || initialError);
 
@@ -96,6 +102,45 @@ export class PDFParser {
           metadata: {},
           rawText: text,
           needsOCR: true,
+          bankDetection,
+        };
+      }
+
+      // Check if this is a Wise statement - use coordinate-based parser
+      // Wise statements have multi-line transactions and 3-column layout
+      if (text.includes("TransferWise") || text.includes("Wise ID:") || text.includes("wise.com")) {
+        console.log("Detected Wise statement - using coordinate-based parser");
+        const transactions = await this.extractWiseTransactionsCoordinate(buffer, text);
+        console.log(`[Wise Parser] Extracted ${transactions.length} transactions`);
+        if (transactions.length > 0) {
+          console.log('[Wise Parser] First transaction:', transactions[0]);
+        }
+
+        // Run sanity check to detect poor quality parsing (e.g., lots of 0 amounts)
+        const sanityCheck = checkParsingAccuracy({
+          pageCount: data.numpages || 1,
+          textLength: text.length,
+          transactions,
+        });
+
+        logSanityCheckResult(sanityCheck);
+
+        // If sanity check failed, trigger OCR fallback
+        if (!sanityCheck.passed) {
+          console.log('⚠️  Wise parser quality check failed - will trigger OCR fallback');
+          return {
+            transactions,
+            metadata: this.extractMetadata(text),
+            rawText: text,
+            needsOCR: true,
+            bankDetection,
+          };
+        }
+
+        return {
+          transactions,
+          metadata: this.extractMetadata(text),
+          rawText: text,
           bankDetection,
         };
       }
@@ -1495,6 +1540,7 @@ export class PDFParser {
 
     // Try to get coordinate-based data for validation (if buffer is provided)
     let coordinateTransactions: Transaction[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let pdfElements: any[] = [];
     let amountColumnMinX = 0;
 
@@ -1595,7 +1641,7 @@ export class PDFParser {
 
       // Check if this line has a transaction type (with or without date)
       // Also check in the line without date prefix (in case date is concatenated)
-      let lineToCheck = line.replace(rbsDatePattern, '').trim();
+      const lineToCheck = line.replace(rbsDatePattern, '').trim();
       const transactionMatch = line.match(transactionTypePattern) || lineToCheck.match(transactionTypePattern);
 
       if (transactionMatch) {
@@ -1605,7 +1651,7 @@ export class PDFParser {
         // Collect continuation lines until we find amounts
         // Keep collecting until we hit another DATE or find numbers that look like amount+balance
         let j = i + 1;
-        let foundBalance = false;
+        // let foundBalance = false; // Unused variable
         while (j < lines.length && j < i + 20) {  // Increased from 10 to 20 lines
           const nextLine = lines[j].trim();
 
@@ -1627,7 +1673,7 @@ export class PDFParser {
 
           // If this line has balance (ends with a number, may have minus sign), mark as found
           if (nextLine.match(/[-]?\d{1,3}(?:,\d{3})*\.\d{2}$/)) {
-            foundBalance = true;
+            // foundBalance = true; // Unused variable
             break;
           }
         }
@@ -1636,7 +1682,7 @@ export class PDFParser {
         i = j - 1;
 
         // Remove the date from the beginning if present
-        let lineWithoutDate = fullLine.replace(rbsDatePattern, '').trim();
+        const lineWithoutDate = fullLine.replace(rbsDatePattern, '').trim();
 
         // IMPORTANT: RBS statements can have MULTIPLE transactions concatenated on the same line
         // Example: "DEBIT CARD ... 6.99 3,479.79 DEBIT CARD ... 0.79 3,479.00 DIRECT DEBIT ... 36.19 3,391.84"
@@ -1683,7 +1729,7 @@ export class PDFParser {
           }
 
           // Remove balance from line if present (with optional minus sign)
-          let lineWithoutBalance = balanceMatch
+          const lineWithoutBalance = balanceMatch
             ? segment.replace(/[-]?\d{1,3}(?:,\d{3})*\.\d{2}$/, '').trim()
             : segment.trim();
 
@@ -1699,7 +1745,7 @@ export class PDFParser {
           console.log(`[RBS Amount Extraction] Line without balance: "${lineWithoutBalance}"`);
 
           // Try to find the amount - we'll collect all possible candidates
-          let amountCandidates: Array<{amount: number, description: string}> = [];
+          const amountCandidates: Array<{amount: number, description: string}> = [];
 
         // Strategy 1: Look for properly formatted amount with comma (e.g., "1,369.92")
         // BUT also check if it might be concatenated (look for digits before it)
@@ -1789,10 +1835,10 @@ export class PDFParser {
           console.log(`  Amount column starts at x=${amountColumnMinX.toFixed(1)}`);
 
           // Find elements on the current row (matching balance)
-          const balanceStr = Math.abs(balance).toFixed(2).replace(/[,\.]/g, '');
+          // const balanceStr = Math.abs(balance).toFixed(2).replace(/[,\.]/g, ''); // Unused
 
           // Find all numeric elements near this transaction
-          const numericElements = pdfElements.filter(el => /^\d+$/.test(el.text.trim()));
+          // const numericElements = pdfElements.filter(el => /^\d+$/.test(el.text.trim())); // Unused
 
           // Find ALL text elements (not just numeric) that might contain parts of the amount
           const allElements = pdfElements.filter(el => {
@@ -3829,6 +3875,24 @@ export class PDFParser {
     // Use enhanced text-based parser instead
     console.log('⚠️  HSBC coordinate parser disabled - using enhanced text-based parser');
     return this.extractHSBCTransactions(parsedText);
+  }
+
+  /**
+   * Extract Wise transactions using coordinate-based parsing
+   * This method uses X,Y coordinates to handle multi-line transactions
+   * and the 3-column layout (Money Out, Money In, Balance)
+   */
+  private async extractWiseTransactionsCoordinate(buffer: Buffer, parsedText: string): Promise<Transaction[]> {
+    try {
+      // Use the coordinate-based parser which handles multi-line transactions
+      // Enable debug mode temporarily to troubleshoot
+      const transactions = await this.wiseParser.parseWiseStatement(buffer, parsedText, true);
+      return transactions;
+    } catch (error) {
+      console.error('⚠️  Coordinate-based Wise parser failed:', error);
+      // Return empty array as there's no text-based fallback for Wise yet
+      return [];
+    }
   }
 
   // Extract transactions from Revolut bank statements

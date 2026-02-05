@@ -28,7 +28,7 @@ export class CSVGenerator {
         Type: transaction.type || "N/A",
         "Money In": isCredit ? transaction.amount.toFixed(2) : "",
         "Money Out": isDebit ? transaction.amount.toFixed(2) : "",
-        Balance: transaction.balance ? transaction.balance.toFixed(2) : "N/A",
+        Balance: transaction.balance !== undefined ? transaction.balance.toFixed(2) : "",
       };
     });
 

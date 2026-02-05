@@ -65,6 +65,7 @@ export class UploadController {
             let pageCount: number | undefined;
             try {
               const pdfParse = await import('pdf-parse');
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const pdfData = await (pdfParse as any).default(file.buffer);
               pageCount = pdfData.numpages;
             } catch {
@@ -152,6 +153,11 @@ export class UploadController {
       // Always generate CSV for preview
       const csv = this.csvGenerator.generateCSV(parsedData.transactions);
 
+      // If we successfully extracted transactions, don't send non-UK bank warning
+      // The parser successfully handled it, so no need to warn the user
+      const shouldIncludeBankDetection = parsedData.bankDetection &&
+        parsedData.transactions.length === 0;
+
       if (format === 'xlsx') {
         // Also generate XLSX
         const xlsxBuffer = this.xlsxGenerator.generateXLSX(parsedData.transactions);
@@ -167,7 +173,7 @@ export class UploadController {
           format: 'xlsx',
           usedOCR: parsedData.usedOCR || false,
           ocrConfidence: parsedData.confidence,
-          bankDetection: parsedData.bankDetection,
+          bankDetection: shouldIncludeBankDetection ? parsedData.bankDetection : undefined,
         });
       } else {
         // CSV only
@@ -181,7 +187,7 @@ export class UploadController {
           format: 'csv',
           usedOCR: parsedData.usedOCR || false,
           ocrConfidence: parsedData.confidence,
-          bankDetection: parsedData.bankDetection,
+          bankDetection: shouldIncludeBankDetection ? parsedData.bankDetection : undefined,
         });
       }
     } catch (error) {

@@ -20,7 +20,7 @@ export class XLSXGenerator {
           transaction.type || "N/A",
           isCredit ? transaction.amount.toFixed(2) : "",
           isDebit ? transaction.amount.toFixed(2) : "",
-          transaction.balance ? transaction.balance.toFixed(2) : "N/A",
+          transaction.balance !== undefined ? transaction.balance.toFixed(2) : "",
         ];
       }),
     ];
