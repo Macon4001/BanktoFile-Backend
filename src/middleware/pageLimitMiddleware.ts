@@ -14,12 +14,12 @@ declare module 'express-serve-static-core' {
 
 /**
  * Helper function to suggest the next tier based on page count
- * Updated to suggest 'starter' (£40) as the primary upgrade path
+ * Shows Basic (£20) for files under 20 pages, Starter (£40) for files over 20 pages
  */
 function getSuggestedTierForPages(pages: number): PlanType | null {
   if (pages <= 5) return null; // Free tier is sufficient
-  // Skip 'basic' tier - go straight to 'starter' (£40) as the recommended upgrade
-  if (pages <= 50) return 'starter'; // Most popular tier
+  if (pages <= 20) return 'basic'; // Basic tier for files under 20 pages
+  if (pages <= 50) return 'starter'; // Starter tier for files over 20 pages
   if (pages <= 100) return 'professional';
   return 'enterprise'; // Unlimited
 }

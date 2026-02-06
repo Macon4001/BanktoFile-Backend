@@ -46,7 +46,7 @@ export function getPricingTiers() {
     },
     basic: {
       name: 'Basic',
-      filesPerMonth: 30, // New subscribers get 30 files/month (legacy users get 150 via is_grandfathered_basic)
+      filesPerMonth: 150, // 150 files/month
       maxPagesPerFile: 20,
       maxFileSizeMB: 10,
       price: 20,
@@ -54,7 +54,7 @@ export function getPricingTiers() {
       priceId: process.env.STRIPE_BASIC_PRICE_ID || 'price_basic',
       yearlyPriceId: process.env.STRIPE_BASIC_YEARLY_PRICE_ID || 'price_basic_yearly',
       features: [
-        '30 files per month',
+        '150 files per month',
         'Up to 20 pages per file',
         'Max 10MB file size',
         'CSV & XLSX formats',
