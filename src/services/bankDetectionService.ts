@@ -95,7 +95,7 @@ export class BankDetectionService {
       return '';
     }
 
-    return 'This statement appears to be from an international bank. BankToFile is optimised for UK banks and we cannot guarantee accuracy for other formats.';
+    return 'This statement appears to be from an international financial institution. BankToFile is optimised for UK institutions and we cannot guarantee accuracy for other formats.';
   }
 }
 

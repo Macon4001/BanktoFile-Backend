@@ -305,7 +305,7 @@ Questions? Just reply to this email.
       </ul>
 
       <div class="help-box">
-        <strong>💡 Quick tip:</strong> We support all major UK banks including Barclays, HSBC, Lloyds, NatWest, and many more. Just upload your PDF bank statement and we'll handle the rest!
+        <strong>💡 Quick tip:</strong> We support all major UK financial institutions. Just upload your PDF bank statement and we'll handle the rest!
       </div>
 
       <div style="text-align: center;">
@@ -339,7 +339,7 @@ Is everything okay? Sometimes people get stuck on:
 • Understanding which formats we support
 • Navigating the upload process
 
-💡 Quick tip: We support all major UK banks including Barclays, HSBC, Lloyds, NatWest, and many more. Just upload your PDF bank statement and we'll handle the rest!
+💡 Quick tip: We support all major UK financial institutions. Just upload your PDF bank statement and we'll handle the rest!
 
 Try converting now: ${this.frontendUrl}
 

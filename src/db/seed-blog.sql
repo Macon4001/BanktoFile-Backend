@@ -131,7 +131,7 @@ Don''t let paper statements hold your business back. Embrace digital transformat
 
 Create a standard format for naming your files:
 - Format: `YYYY-MM_BankName_AccountType_Statement.csv`
-- Example: `2024-01_LloydsBank_Business_Statement.csv`
+- Example: `2024-01_MyBank_Business_Statement.csv`
 
 This makes files:
 - Easy to sort chronologically

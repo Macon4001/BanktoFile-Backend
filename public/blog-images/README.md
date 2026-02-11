@@ -33,10 +33,10 @@ This folder is for storing blog post images as static files.
 ## Examples
 
 ```
-/blog-images/barclays-statement-example.png
+/blog-images/statement-example.png
 /blog-images/excel-import-screenshot.jpg
 /blog-images/csv-format-comparison.png
-/blog-images/bank-logo-lloyds.svg
+/blog-images/financial-institution-logo.svg
 ```
 
 ## Important Notes
