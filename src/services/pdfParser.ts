@@ -4,6 +4,7 @@ import { MetroBankCoordinateParser } from "./metroBankCoordinateParser.js";
 import { GenericCoordinateParser } from "./genericCoordinateParser.js";
 import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
 import { WiseCoordinateParser } from "./wiseCoordinateParser.js";
+import { CoopBankCoordinateParser } from "./coopBankCoordinateParser.js";
 import { bankDetectionService, BankDetectionResult } from "./bankDetectionService.js";
 import { checkParsingAccuracy, logSanityCheckResult } from "../utils/parsingAccuracyCheck.js";
 
@@ -31,12 +32,14 @@ export class PDFParser {
   private genericCoordinateParser: GenericCoordinateParser;
   private hsbcParser: HSBCCoordinateParser;
   private wiseParser: WiseCoordinateParser;
+  private coopBankParser: CoopBankCoordinateParser;
 
   constructor() {
     this.metroBankParser = new MetroBankCoordinateParser();
     this.genericCoordinateParser = new GenericCoordinateParser();
     this.hsbcParser = new HSBCCoordinateParser();
     this.wiseParser = new WiseCoordinateParser();
+    this.coopBankParser = new CoopBankCoordinateParser();
   }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean; bankDetection?: BankDetectionResult }> {
     let text = "";
@@ -163,6 +166,20 @@ export class PDFParser {
       if (text.includes("HSBC") || text.includes("HBUKGB") || text.includes("www.hsbc.co.uk")) {
         console.log("Detected HSBC statement - using coordinate-based parser");
         const transactions = await this.extractHSBCTransactionsCoordinate(buffer, text);
+        return {
+          transactions,
+          metadata: this.extractMetadata(text),
+          rawText: text,
+          bankDetection,
+        };
+      }
+
+      // Check if this is a Co-op Bank statement - use coordinate-based parser
+      // Co-op Bank PDFs have specific column layout: Date, Description, Withdrawals, Deposits, Balance
+      if (text.includes("Co-operative Bank") || text.includes("CPBKGB22") || text.includes("BUS DIRPLUS") ||
+          (text.includes("CPBK") && text.includes("IBAN"))) {
+        console.log("Detected Co-op Bank statement - using coordinate-based parser");
+        const transactions = await this.extractCoopBankTransactionsCoordinate(buffer, text);
         return {
           transactions,
           metadata: this.extractMetadata(text),
@@ -3875,6 +3892,24 @@ export class PDFParser {
     // Use enhanced text-based parser instead
     console.log('⚠️  HSBC coordinate parser disabled - using enhanced text-based parser');
     return this.extractHSBCTransactions(parsedText);
+  }
+
+  /**
+   * Extract Co-op Bank transactions using coordinate-based parsing
+   * This method uses X,Y coordinates to handle the specific column layout:
+   * Date, Description, Withdrawals, Deposits, Balance
+   */
+  private async extractCoopBankTransactionsCoordinate(buffer: Buffer, parsedText: string): Promise<Transaction[]> {
+    try {
+      // Use the coordinate-based parser for Co-op Bank's specific column layout
+      // Enable debug mode to see what's happening
+      const transactions = await this.coopBankParser.parseCoopBankStatement(buffer, parsedText, true);
+      return transactions;
+    } catch (error) {
+      console.error('⚠️  Coordinate-based Co-op Bank parser failed:', error);
+      // Return empty array as there's no text-based fallback for Co-op Bank yet
+      return [];
+    }
   }
 
   /**
