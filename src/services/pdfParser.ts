@@ -5,6 +5,7 @@ import { GenericCoordinateParser } from "./genericCoordinateParser.js";
 import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
 import { WiseCoordinateParser } from "./wiseCoordinateParser.js";
 import { CoopBankCoordinateParser } from "./coopBankCoordinateParser.js";
+import { LloydsBusinessParser } from "./lloydsBusinessParser.js";
 import { bankDetectionService, BankDetectionResult } from "./bankDetectionService.js";
 import { checkParsingAccuracy, logSanityCheckResult } from "../utils/parsingAccuracyCheck.js";
 
@@ -33,6 +34,7 @@ export class PDFParser {
   private hsbcParser: HSBCCoordinateParser;
   private wiseParser: WiseCoordinateParser;
   private coopBankParser: CoopBankCoordinateParser;
+  private lloydsBusinessParser: LloydsBusinessParser;
 
   constructor() {
     this.metroBankParser = new MetroBankCoordinateParser();
@@ -40,6 +42,7 @@ export class PDFParser {
     this.hsbcParser = new HSBCCoordinateParser();
     this.wiseParser = new WiseCoordinateParser();
     this.coopBankParser = new CoopBankCoordinateParser();
+    this.lloydsBusinessParser = new LloydsBusinessParser();
   }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean; bankDetection?: BankDetectionResult }> {
     let text = "";
@@ -321,6 +324,13 @@ export class PDFParser {
   private async extractTransactions(text: string, buffer?: Buffer): Promise<Transaction[]> {
     const transactions: Transaction[] = [];
     const lines = text.split("\n");
+
+    // Check if this is a Lloyds Business Account (before RBS to avoid conflicts)
+    const lloydsBusinessTransactions = this.lloydsBusinessParser.parseStatement(text);
+    if (lloydsBusinessTransactions.length > 0) {
+      console.log(`✅ Detected Lloyds Business Account - extracted ${lloydsBusinessTransactions.length} transactions`);
+      return lloydsBusinessTransactions;
+    }
 
     // Check if this is an RBS (Royal Bank of Scotland) statement
     if (text.includes("RBOSGB2L") || text.includes("Royal Bank of Scotland") || text.includes("BUSINESS CURRENT ACCOUNT")) {
