@@ -1208,6 +1208,7 @@ export class PostgresStore {
     free_users: number;
     anonymous_users: number;
     active_subscriptions: number;
+    cancelled_pending_downgrade: number;
     new_users_today: number;
     new_users_this_week: number;
     total_conversions: number;
@@ -1232,6 +1233,13 @@ export class PostgresStore {
           COUNT(DISTINCT CASE WHEN u.plan = 'free' THEN u.id END)::integer as free_users,
           COUNT(DISTINCT CASE WHEN u.email LIKE '%@anonymous.local' THEN u.id END)::integer as anonymous_users,
           COUNT(DISTINCT CASE WHEN u.subscription_status = 'active' THEN u.id END)::integer as active_subscriptions,
+          COUNT(DISTINCT CASE
+            WHEN u.subscription_status = 'canceled'
+              AND u.plan != 'free'
+              AND u.current_period_end IS NOT NULL
+              AND u.current_period_end > NOW()
+            THEN u.id
+          END)::integer as cancelled_pending_downgrade,
           COUNT(DISTINCT CASE WHEN u.created_at >= CURRENT_DATE THEN u.id END)::integer as new_users_today,
           COUNT(DISTINCT CASE WHEN u.created_at >= CURRENT_DATE - INTERVAL '7 days' THEN u.id END)::integer as new_users_this_week,
           COALESCE(COUNT(cl.id), 0)::integer as total_conversions,
@@ -1240,7 +1248,7 @@ export class PostgresStore {
         LEFT JOIN conversion_logs cl ON u.id = cl.user_id
       `);
 
-      // Calculate MRR from plan distribution (excluding admin)
+      // Calculate MRR from plan distribution (excluding admin and cancelled subscriptions)
       const planResult = await client.query(`
         SELECT
           plan,
