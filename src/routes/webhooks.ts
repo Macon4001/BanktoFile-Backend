@@ -50,6 +50,7 @@ router.post('/stripe', async (req: Request, res: Response) => {
 
       case 'customer.subscription.created':
       case 'customer.subscription.updated': {
+        // Handles both creation and updates (including cancel_at_period_end changes)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const subscription = event.data.object as any;
         await handleSubscriptionUpdate(subscription);
@@ -162,6 +163,8 @@ async function handleCheckoutComplete(session: any) {
 async function handleSubscriptionUpdate(subscription: any) {
   try {
     console.log('[WEBHOOK] handleSubscriptionUpdate - subscription ID:', subscription.id);
+    console.log('[WEBHOOK] Subscription status:', subscription.status);
+    console.log('[WEBHOOK] Cancel at period end:', subscription.cancel_at_period_end);
 
     const userId = subscription.metadata?.userId;
     const plan = subscription.metadata?.plan as PlanType;
@@ -186,22 +189,39 @@ async function handleSubscriptionUpdate(subscription: any) {
     console.log('[WEBHOOK] Found user:', user.email, 'plan:', plan, 'billing:', billingInterval);
 
     // Extract period dates - Stripe uses unix timestamps (seconds)
-    // Get the first subscription item's period
     const periodStart = subscription.current_period_start || subscription.billing_cycle_anchor;
     const periodEnd = subscription.current_period_end;
 
     console.log('[WEBHOOK] Period timestamps:', { periodStart, periodEnd });
 
+    // Validate that we have period dates - this is critical!
+    if (!periodEnd || typeof periodEnd !== 'number' || isNaN(periodEnd)) {
+      console.error('[WEBHOOK] ⚠️  WARNING: Missing or invalid current_period_end!');
+      console.error('[WEBHOOK] This will cause issues with cancellation handling!');
+    }
+
     // Check if user is grandfathered to preserve their legacy limits
     const isGrandfathered = user.is_grandfathered_basic || false;
     const filesLimit = getFilesLimitForUser(plan, isGrandfathered);
+
+    // Determine subscription status
+    // If cancel_at_period_end is true, the subscription is still active but scheduled to cancel
+    let subscriptionStatus = subscription.status;
+
+    // Important: If subscription is scheduled to cancel (cancel_at_period_end = true),
+    // we keep it as "active" in our DB but we track the end date
+    // The actual cancellation happens when customer.subscription.deleted fires
+    if (subscription.cancel_at_period_end && subscription.status === 'active') {
+      console.log('[WEBHOOK] 📅 Subscription is scheduled to cancel at period end');
+      subscriptionStatus = 'active'; // Keep as active until period ends
+    }
 
     // Build update object - only include dates if they're valid
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updateData: any = {
       stripe_customer_id: subscription.customer,
       subscription_id: subscription.id,
-      subscription_status: subscription.status as 'active' | 'canceled' | 'past_due' | 'trialing' | 'incomplete' | 'incomplete_expired' | 'unpaid',
+      subscription_status: subscriptionStatus as 'active' | 'canceled' | 'past_due' | 'trialing' | 'incomplete' | 'incomplete_expired' | 'unpaid',
       plan: plan,
       monthly_files_limit: filesLimit, // Respects grandfathering
       billing_interval: billingInterval as 'monthly' | 'yearly',
@@ -210,16 +230,27 @@ async function handleSubscriptionUpdate(subscription: any) {
     // Only add dates if they exist and are valid numbers
     if (periodStart && typeof periodStart === 'number' && !isNaN(periodStart)) {
       updateData.current_period_start = new Date(periodStart * 1000);
-    }
-    if (periodEnd && typeof periodEnd === 'number' && !isNaN(periodEnd)) {
-      updateData.current_period_end = new Date(periodEnd * 1000);
+      console.log('[WEBHOOK] ✅ Set current_period_start:', updateData.current_period_start.toISOString());
+    } else {
+      console.error('[WEBHOOK] ⚠️  Missing current_period_start!');
     }
 
-    console.log('[WEBHOOK] Updating user with:', updateData);
+    if (periodEnd && typeof periodEnd === 'number' && !isNaN(periodEnd)) {
+      updateData.current_period_end = new Date(periodEnd * 1000);
+      console.log('[WEBHOOK] ✅ Set current_period_end:', updateData.current_period_end.toISOString());
+    } else {
+      console.error('[WEBHOOK] ⚠️  Missing current_period_end!');
+    }
+
+    console.log('[WEBHOOK] Updating user with:', JSON.stringify(updateData, null, 2));
 
     await db.updateUser(userId, updateData);
 
     console.log(`[WEBHOOK] ✅ Subscription updated for user ${userId}, plan: ${plan}, billing: ${billingInterval}`);
+
+    if (subscription.cancel_at_period_end) {
+      console.log(`[WEBHOOK] 📅 User will be downgraded to free plan on: ${updateData.current_period_end?.toISOString()}`);
+    }
   } catch (error) {
     console.error('[WEBHOOK] ❌ Error in handleSubscriptionUpdate:', error);
     throw error;
@@ -229,43 +260,84 @@ async function handleSubscriptionUpdate(subscription: any) {
 // Handle subscription deleted/canceled
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleSubscriptionDeleted(subscription: any) {
-  const userId = subscription.metadata?.userId;
+  try {
+    console.log('[WEBHOOK] handleSubscriptionDeleted - subscription ID:', subscription.id);
 
-  if (!userId) {
-    console.error('Missing userId in subscription metadata');
-    return;
-  }
+    const userId = subscription.metadata?.userId;
 
-  const user = await db.getUserById(userId);
-  if (!user) {
-    console.error('User not found:', userId);
-    return;
-  }
+    if (!userId) {
+      console.error('[WEBHOOK] Missing userId in subscription metadata');
+      return;
+    }
 
-  // Check if subscription is canceled_at_period_end (user keeps access until period ends)
-  // vs immediately canceled (cancel_at_period_end = false)
-  const subWithPeriod = subscription as unknown as StripeSubscriptionWithPeriod;
-  const periodEnd = new Date(subWithPeriod.current_period_end * 1000);
-  const now = new Date();
+    const user = await db.getUserById(userId);
+    if (!user) {
+      console.error('[WEBHOOK] User not found:', userId);
+      return;
+    }
 
-  // Only downgrade if we're past the period end
-  // If canceled but still within paid period, keep their access
-  if (periodEnd > now) {
-    // User canceled but still has time left - mark as canceled but keep plan
-    await db.updateUser(userId, {
-      subscription_status: 'canceled',
-    });
-    console.log(`Subscription marked as canceled for user ${userId}, but access retained until ${periodEnd}`);
-  } else {
-    // Period has ended, downgrade to free plan
-    await db.updateUser(userId, {
-      plan: 'free',
-      monthly_files_limit: getFilesLimit('free'),
-      files_used_monthly: 0,
-      subscription_status: 'canceled',
-      subscription_id: undefined,
-    });
-    console.log(`Subscription expired, user ${userId} downgraded to free plan`);
+    console.log(`[WEBHOOK] Processing cancellation for user: ${user.email} (${user.plan})`);
+
+    // Get period end from subscription or fall back to database
+    const subWithPeriod = subscription as unknown as StripeSubscriptionWithPeriod;
+    let periodEnd: Date;
+
+    if (subWithPeriod.current_period_end) {
+      periodEnd = new Date(subWithPeriod.current_period_end * 1000);
+      console.log(`[WEBHOOK] Period end from Stripe: ${periodEnd.toISOString()}`);
+    } else if (user.current_period_end) {
+      periodEnd = new Date(user.current_period_end);
+      console.log(`[WEBHOOK] Period end from database: ${periodEnd.toISOString()}`);
+    } else {
+      // No period end available - immediately downgrade
+      console.error('[WEBHOOK] ⚠️  No period end date available! Downgrading immediately.');
+      await db.updateUser(userId, {
+        plan: 'free',
+        monthly_files_limit: getFilesLimit('free'),
+        files_used_monthly: 0,
+        subscription_status: 'canceled',
+        subscription_id: undefined,
+        current_period_end: undefined,
+        current_period_start: undefined,
+      });
+      console.log(`[WEBHOOK] ✅ User ${userId} downgraded to free plan immediately (no period end date)`);
+      return;
+    }
+
+    const now = new Date();
+    console.log(`[WEBHOOK] Current time: ${now.toISOString()}`);
+    console.log(`[WEBHOOK] Period end: ${periodEnd.toISOString()}`);
+    console.log(`[WEBHOOK] Time until period end: ${Math.round((periodEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))} days`);
+
+    // Check if we're past the period end
+    if (periodEnd > now) {
+      // User canceled but still has time left - mark as canceled but keep plan access
+      // This handles the grace period for users who cancel mid-billing cycle
+      await db.updateUser(userId, {
+        subscription_status: 'canceled',
+      });
+      console.log(`[WEBHOOK] ✅ Subscription marked as canceled for user ${userId}`);
+      console.log(`[WEBHOOK] 📅 User retains ${user.plan} access until ${periodEnd.toISOString()}`);
+      console.log(`[WEBHOOK] ⏰ Automatic downgrade will occur on ${periodEnd.toISOString()}`);
+    } else {
+      // Period has ended, downgrade to free plan immediately
+      await db.updateUser(userId, {
+        plan: 'free',
+        daily_pages_limit: 3,
+        pages_used_today: 0,
+        monthly_files_limit: getFilesLimit('free'), // 90 files for free (3/day * 30 days)
+        files_used_monthly: 0,
+        subscription_status: 'canceled',
+        subscription_id: undefined,
+        current_period_end: undefined,
+        current_period_start: undefined,
+      });
+      console.log(`[WEBHOOK] ✅ Subscription period expired, user ${userId} downgraded to free plan`);
+      console.log(`[WEBHOOK] 📊 New limits: 3 pages/day, 90 files/month`);
+    }
+  } catch (error) {
+    console.error('[WEBHOOK] ❌ Error in handleSubscriptionDeleted:', error);
+    throw error;
   }
 }
 

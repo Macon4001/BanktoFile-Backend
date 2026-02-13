@@ -9,7 +9,9 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "lint": "eslint src/**/*.ts",
-    "prepare": "husky"
+    "prepare": "husky",
+    "sync-stripe": "tsx scripts/syncStripeSubscriptions.ts",
+    "check-expired": "tsx scripts/checkExpiredSubscriptions.ts"
   },
   "keywords": [],
   "author": "",
