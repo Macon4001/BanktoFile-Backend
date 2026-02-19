@@ -6,6 +6,7 @@ import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
 import { WiseCoordinateParser } from "./wiseCoordinateParser.js";
 import { CoopBankCoordinateParser } from "./coopBankCoordinateParser.js";
 import { LloydsBusinessParser } from "./lloydsBusinessParser.js";
+import { MettleNatwestCoordinateParser } from "./mettleNatwestCoordinateParser.js";
 import { bankDetectionService, BankDetectionResult } from "./bankDetectionService.js";
 import { checkParsingAccuracy, logSanityCheckResult } from "../utils/parsingAccuracyCheck.js";
 
@@ -35,6 +36,7 @@ export class PDFParser {
   private wiseParser: WiseCoordinateParser;
   private coopBankParser: CoopBankCoordinateParser;
   private lloydsBusinessParser: LloydsBusinessParser;
+  private mettleNatwestParser: MettleNatwestCoordinateParser;
 
   constructor() {
     this.metroBankParser = new MetroBankCoordinateParser();
@@ -43,6 +45,7 @@ export class PDFParser {
     this.wiseParser = new WiseCoordinateParser();
     this.coopBankParser = new CoopBankCoordinateParser();
     this.lloydsBusinessParser = new LloydsBusinessParser();
+    this.mettleNatwestParser = new MettleNatwestCoordinateParser();
   }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean; bankDetection?: BankDetectionResult }> {
     let text = "";
@@ -169,6 +172,22 @@ export class PDFParser {
       if (text.includes("HSBC") || text.includes("HBUKGB") || text.includes("www.hsbc.co.uk")) {
         console.log("Detected HSBC statement - using coordinate-based parser");
         const transactions = await this.extractHSBCTransactionsCoordinate(buffer, text);
+        return {
+          transactions,
+          metadata: this.extractMetadata(text),
+          rawText: text,
+          bankDetection,
+        };
+      }
+
+      // Check if this is a Mettle (NatWest) statement - use coordinate-based parser
+      // Mettle statements are issued by National Westminster Bank plc trading as Mettle.
+      // They contain "Mettle" and/or "www.mettle.co.uk" in the footer.
+      // This check MUST come before the generic NatWest check because Mettle statements
+      // also contain "National Westminster Bank" in their footer text.
+      if (text.includes("Mettle") || text.includes("www.mettle.co.uk") || text.includes("mettle.co.uk")) {
+        console.log("Detected Mettle (NatWest) statement - using coordinate-based parser");
+        const transactions = await this.extractMettleNatwestTransactionsCoordinate(buffer, text);
         return {
           transactions,
           metadata: this.extractMetadata(text),
@@ -3902,6 +3921,21 @@ export class PDFParser {
     // Use enhanced text-based parser instead
     console.log('⚠️  HSBC coordinate parser disabled - using enhanced text-based parser');
     return this.extractHSBCTransactions(parsedText);
+  }
+
+  /**
+   * Extract Mettle (NatWest) transactions using coordinate-based parsing.
+   * Mettle statements have columns: DATE, DESCRIPTION, £ IN, £ OUT, £ BALANCE
+   * with duplicated description text in the PDF stream that the parser deduplicates.
+   */
+  private async extractMettleNatwestTransactionsCoordinate(buffer: Buffer, parsedText: string): Promise<Transaction[]> {
+    try {
+      const transactions = await this.mettleNatwestParser.parseMettleStatement(buffer, parsedText, true);
+      return transactions;
+    } catch (error) {
+      console.error('⚠️  Coordinate-based Mettle (NatWest) parser failed:', error);
+      return [];
+    }
   }
 
   /**

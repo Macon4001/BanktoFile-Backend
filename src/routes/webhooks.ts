@@ -170,19 +170,41 @@ async function handleSubscriptionUpdate(subscription: any) {
     const plan = subscription.metadata?.plan as PlanType;
     const billingInterval = subscription.metadata?.billingInterval || 'monthly';
 
-    if (!userId) {
-      console.error('[WEBHOOK] Missing userId in subscription metadata');
-      return;
+    // Try to find user - first by metadata userId, then fall back to stripe_customer_id
+    let user = userId ? await db.getUserById(userId) : undefined;
+
+    if (!user) {
+      if (userId) {
+        console.error('[WEBHOOK] User not found by userId:', userId, '- trying stripe_customer_id fallback');
+      } else {
+        console.error('[WEBHOOK] Missing userId in subscription metadata - trying stripe_customer_id fallback');
+      }
+
+      // Fallback: look up by Stripe customer ID
+      if (subscription.customer) {
+        user = await db.getUserByStripeCustomerId(subscription.customer);
+        if (user) {
+          console.log('[WEBHOOK] ✅ Found user by stripe_customer_id:', user.email);
+        }
+      }
+
+      // Second fallback: look up by subscription ID
+      if (!user && subscription.id) {
+        const allUsers = await db.getAllUsers();
+        user = allUsers.find(u => u.subscription_id === subscription.id);
+        if (user) {
+          console.log('[WEBHOOK] ✅ Found user by subscription_id:', user.email);
+        }
+      }
+
+      if (!user) {
+        console.error('[WEBHOOK] ❌ Could not find user for subscription:', subscription.id, 'customer:', subscription.customer);
+        return;
+      }
     }
 
     if (!plan) {
       console.error('[WEBHOOK] Missing plan in subscription metadata');
-      return;
-    }
-
-    const user = await db.getUserById(userId);
-    if (!user) {
-      console.error('[WEBHOOK] User not found:', userId);
       return;
     }
 
@@ -265,15 +287,37 @@ async function handleSubscriptionDeleted(subscription: any) {
 
     const userId = subscription.metadata?.userId;
 
-    if (!userId) {
-      console.error('[WEBHOOK] Missing userId in subscription metadata');
-      return;
-    }
+    // Try to find user - first by metadata userId, then fall back to stripe_customer_id
+    let user = userId ? await db.getUserById(userId) : undefined;
 
-    const user = await db.getUserById(userId);
     if (!user) {
-      console.error('[WEBHOOK] User not found:', userId);
-      return;
+      if (userId) {
+        console.error('[WEBHOOK] User not found by userId:', userId, '- trying stripe_customer_id fallback');
+      } else {
+        console.error('[WEBHOOK] Missing userId in subscription metadata - trying stripe_customer_id fallback');
+      }
+
+      // Fallback: look up by Stripe customer ID
+      if (subscription.customer) {
+        user = await db.getUserByStripeCustomerId(subscription.customer);
+        if (user) {
+          console.log('[WEBHOOK] ✅ Found user by stripe_customer_id:', user.email);
+        }
+      }
+
+      // Second fallback: look up by subscription ID
+      if (!user && subscription.id) {
+        const allUsers = await db.getAllUsers();
+        user = allUsers.find(u => u.subscription_id === subscription.id);
+        if (user) {
+          console.log('[WEBHOOK] ✅ Found user by subscription_id:', user.email);
+        }
+      }
+
+      if (!user) {
+        console.error('[WEBHOOK] ❌ Could not find user for subscription:', subscription.id, 'customer:', subscription.customer);
+        return;
+      }
     }
 
     console.log(`[WEBHOOK] Processing cancellation for user: ${user.email} (${user.plan})`);
@@ -291,16 +335,16 @@ async function handleSubscriptionDeleted(subscription: any) {
     } else {
       // No period end available - immediately downgrade
       console.error('[WEBHOOK] ⚠️  No period end date available! Downgrading immediately.');
-      await db.updateUser(userId, {
+      await db.updateUser(user.id, {
         plan: 'free',
         monthly_files_limit: getFilesLimit('free'),
         files_used_monthly: 0,
         subscription_status: 'canceled',
-        subscription_id: undefined,
-        current_period_end: undefined,
-        current_period_start: undefined,
+        subscription_id: null,
+        current_period_end: null,
+        current_period_start: null,
       });
-      console.log(`[WEBHOOK] ✅ User ${userId} downgraded to free plan immediately (no period end date)`);
+      console.log(`[WEBHOOK] ✅ User ${user.id} (${user.email}) downgraded to free plan immediately (no period end date)`);
       return;
     }
 
@@ -313,26 +357,26 @@ async function handleSubscriptionDeleted(subscription: any) {
     if (periodEnd > now) {
       // User canceled but still has time left - mark as canceled but keep plan access
       // This handles the grace period for users who cancel mid-billing cycle
-      await db.updateUser(userId, {
+      await db.updateUser(user.id, {
         subscription_status: 'canceled',
       });
-      console.log(`[WEBHOOK] ✅ Subscription marked as canceled for user ${userId}`);
+      console.log(`[WEBHOOK] ✅ Subscription marked as canceled for user ${user.id} (${user.email})`);
       console.log(`[WEBHOOK] 📅 User retains ${user.plan} access until ${periodEnd.toISOString()}`);
       console.log(`[WEBHOOK] ⏰ Automatic downgrade will occur on ${periodEnd.toISOString()}`);
     } else {
       // Period has ended, downgrade to free plan immediately
-      await db.updateUser(userId, {
+      await db.updateUser(user.id, {
         plan: 'free',
         daily_pages_limit: 3,
         pages_used_today: 0,
         monthly_files_limit: getFilesLimit('free'), // 90 files for free (3/day * 30 days)
         files_used_monthly: 0,
         subscription_status: 'canceled',
-        subscription_id: undefined,
-        current_period_end: undefined,
-        current_period_start: undefined,
+        subscription_id: null,
+        current_period_end: null,
+        current_period_start: null,
       });
-      console.log(`[WEBHOOK] ✅ Subscription period expired, user ${userId} downgraded to free plan`);
+      console.log(`[WEBHOOK] ✅ Subscription period expired, user ${user.id} (${user.email}) downgraded to free plan`);
       console.log(`[WEBHOOK] 📊 New limits: 3 pages/day, 90 files/month`);
     }
   } catch (error) {

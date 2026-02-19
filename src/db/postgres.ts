@@ -6,8 +6,8 @@ export interface User {
   email: string;
   password_hash?: string;
   name?: string;
-  stripe_customer_id?: string;
-  subscription_id?: string;
+  stripe_customer_id?: string | null;
+  subscription_id?: string | null;
   subscription_status?: 'active' | 'canceled' | 'past_due' | 'trialing' | 'incomplete' | 'incomplete_expired' | 'unpaid';
   plan: 'free' | 'basic' | 'starter' | 'professional' | 'enterprise';
   pages_used_today: number;
@@ -17,8 +17,8 @@ export interface User {
   monthly_pages_limit: number;
   files_used_monthly: number;
   monthly_files_limit: number;
-  current_period_start?: Date;
-  current_period_end?: Date;
+  current_period_start?: Date | null;
+  current_period_end?: Date | null;
   google_id?: string;
   picture?: string;
   is_grandfathered_basic?: boolean; // TRUE = legacy 150 files/month, FALSE/NULL = new 30 files/month
@@ -340,13 +340,23 @@ export class PostgresStore {
         current_period_end: 'current_period_end',
         google_id: 'google_id',
         picture: 'picture',
+        is_grandfathered_basic: 'is_grandfathered_basic',
+        billing_interval: 'billing_interval',
+        welcome_email_sent: 'welcome_email_sent',
+        nudge_email_sent: 'nudge_email_sent',
+        limit_hit_email_sent: 'limit_hit_email_sent',
+        upgrade_reminder_sent: 'upgrade_reminder_sent',
+        limit_hit_at: 'limit_hit_at',
+        last_conversion_at: 'last_conversion_at',
       };
 
       Object.entries(updates).forEach(([key, value]) => {
         const dbField = fieldMapping[key];
+        // Allow null values to clear fields, but skip pure undefined (not explicitly set)
         if (dbField && value !== undefined) {
           fields.push(`${dbField} = $${paramIndex}`);
-          values.push(value);
+          // Convert undefined to null for DB (handles clearing fields like subscription_id)
+          values.push(value === undefined ? null : value);
           paramIndex++;
         }
       });
