@@ -44,7 +44,7 @@ router.post('/feedback', async (req: Request, res: Response) => {
       bankName: bank_name || null,
     });
 
-    // Send admin notification email (non-blocking)
+    // Send admin notification email for all feedback (non-blocking)
     if (!email.trim().includes('@anonymous.local')) {
       brevoEmailService.sendAdminFeedbackNotification(
         email.trim(),
@@ -52,9 +52,11 @@ router.post('/feedback', async (req: Request, res: Response) => {
         rating as 'positive' | 'negative',
         bank_name || undefined,
         comment || undefined
-      ).catch(error => {
-        console.error('Failed to send admin feedback notification:', error);
-        // Don't fail the user operation if notification fails
+      ).then(() => {
+        console.log(`✅ Feedback notification sent for ${email.trim()} (${rating})`);
+      }).catch(error => {
+        console.error('❌ Failed to send feedback notification:', error);
+        console.error('❌ Feedback details - email:', email.trim(), 'bank:', bank_name, 'comment:', comment);
       });
     }
 

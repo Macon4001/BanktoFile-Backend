@@ -468,6 +468,10 @@ The BankToFile Team
     bankName: string | undefined,
     comment: string | undefined
   ): Promise<void> {
+    if (!process.env.BREVO_API_KEY) {
+      console.error('❌ sendAdminFeedbackNotification: BREVO_API_KEY is not set - cannot send email');
+      throw new Error('BREVO_API_KEY not configured');
+    }
     const ratingEmoji = rating === 'positive' ? '👍' : '👎';
     const ratingText = rating === 'positive' ? 'POSITIVE' : 'NEGATIVE';
     const ratingColor = rating === 'positive' ? '#10b981' : '#ef4444';
