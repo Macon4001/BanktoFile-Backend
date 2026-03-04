@@ -56,11 +56,27 @@ export class BrevoEmailService {
   }
 
   /**
-   * PRIORITY 1: Welcome Email (Immediate on signup)
-   * Subject: "Your first conversion is ready"
-   * Trigger: User creates account
+   * PRIORITY 1: Welcome Email (Immediate on first download after email gate)
+   * Subject: "Your converted bank statement from BankToFile"
+   * Trigger: User provides email and downloads their first file
    */
-  async sendWelcomeEmail(userEmail: string, userName?: string): Promise<void> {
+  async sendWelcomeEmail(
+    userEmail: string,
+    userName?: string,
+    conversionData?: {
+      transactionCount: number;
+      bankName?: string;
+      conversionsRemaining: number;
+    }
+  ): Promise<void> {
+    const bankInfo = conversionData?.bankName ? ` from your ${conversionData.bankName} statement` : '';
+    const transactionInfo = conversionData?.transactionCount
+      ? `We converted <strong>${conversionData.transactionCount} transactions</strong>${bankInfo}.`
+      : 'Your file has been successfully converted.';
+    const remainingInfo = conversionData?.conversionsRemaining !== undefined
+      ? `You've got <strong>${conversionData.conversionsRemaining} free conversions remaining</strong> on your account.`
+      : 'You have <strong>3 free conversions</strong> to get started.';
+
     const htmlContent = `
 <!DOCTYPE html>
 <html>
@@ -75,6 +91,7 @@ export class BrevoEmailService {
     .content { background: #fff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px; }
     .button { display: inline-block; background: #10b981; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
     .button:hover { background: #059669; }
+    .highlight { background: #ecfdf5; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #10b981; }
     .feature { margin: 15px 0; padding-left: 25px; position: relative; }
     .feature:before { content: "✓"; position: absolute; left: 0; color: #10b981; font-weight: bold; }
     .footer { text-align: center; margin-top: 30px; font-size: 14px; color: #6b7280; }
@@ -84,20 +101,26 @@ export class BrevoEmailService {
   <div class="container">
     <div class="header">
       <img src="${this.frontendUrl}/logo.png" alt="BankToFile" class="logo" />
-      <h1 style="margin: 0; font-size: 28px;">Welcome to BankToFile!</h1>
+      <h1 style="margin: 0; font-size: 28px;">Your Converted Bank Statement</h1>
     </div>
     <div class="content">
       <p>Hi${userName ? ` ${userName}` : ''},</p>
 
-      <p><strong>Your first conversion is ready!</strong></p>
+      <p><strong>Your file is ready!</strong></p>
 
-      <p>You have <strong>3 free conversions</strong> to get started. Convert your bank statements to Excel or CSV in seconds.</p>
-
-      <div style="text-align: center;">
-        <a href="${this.frontendUrl}" class="button">Convert Your First Statement →</a>
+      <div class="highlight">
+        <p style="margin: 0;">${transactionInfo}</p>
       </div>
 
-      <p><strong>What you can do:</strong></p>
+      <p>${remainingInfo}</p>
+
+      ${conversionData?.conversionsRemaining ? `
+      <div style="text-align: center;">
+        <a href="${this.frontendUrl}" class="button">Convert Another Statement →</a>
+      </div>
+      ` : ''}
+
+      <p><strong>What you can do with BankToFile:</strong></p>
       <div class="feature">Convert PDF bank statements to Excel/CSV</div>
       <div class="feature">Works with all major UK banks</div>
       <div class="feature">Fast, secure, and accurate</div>
@@ -117,16 +140,25 @@ export class BrevoEmailService {
 </html>
     `;
 
+    const bankInfoText = conversionData?.bankName ? ` from your ${conversionData.bankName} statement` : '';
+    const transactionInfoText = conversionData?.transactionCount
+      ? `We converted ${conversionData.transactionCount} transactions${bankInfoText}.`
+      : 'Your file has been successfully converted.';
+    const remainingInfoText = conversionData?.conversionsRemaining !== undefined
+      ? `You've got ${conversionData.conversionsRemaining} free conversions remaining.`
+      : 'You have 3 free conversions to get started.';
+
     const textContent = `
 Hi${userName ? ` ${userName}` : ''},
 
-Your first conversion is ready!
+Your converted bank statement from BankToFile
 
-You have 3 free conversions to get started. Convert your bank statements to Excel or CSV in seconds.
+${transactionInfoText}
 
-Get started: ${this.frontendUrl}
+${remainingInfoText}
 
-What you can do:
+${conversionData?.conversionsRemaining ? `Convert another statement: ${this.frontendUrl}\n` : ''}
+What you can do with BankToFile:
 ✓ Convert PDF bank statements to Excel/CSV
 ✓ Works with all major UK banks
 ✓ Fast, secure, and accurate
@@ -143,7 +175,7 @@ The BankToFile Team
     await this.sendEmail({
       to: userEmail,
       toName: userName,
-      subject: 'Your first conversion is ready!',
+      subject: 'Your converted bank statement from BankToFile',
       htmlContent,
       textContent,
     });

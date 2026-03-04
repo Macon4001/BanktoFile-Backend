@@ -32,6 +32,15 @@ export interface User {
   limit_hit_at?: Date;
   last_conversion_at?: Date;
 
+  // UTM tracking fields
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+
+  // Email gate tracking
+  first_conversion_at?: Date | null;
+  email_gate_completed_at?: Date | null;
+
   created_at: Date;
   updated_at: Date;
 
@@ -140,6 +149,18 @@ export interface FeedbackSummary {
   positive_count: number;
   negative_count: number;
   total_count: number;
+}
+
+export interface PendingConversion {
+  id: string;
+  session_token: string;
+  file_name: string;
+  csv_data: string;
+  xlsx_data?: string | null;
+  transactions: unknown; // JSONB array of transactions
+  metadata?: unknown | null; // JSONB object with bank name, date range, etc.
+  created_at: Date;
+  expires_at: Date;
 }
 
 export interface IpConversion {

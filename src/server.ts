@@ -10,6 +10,7 @@ import uploadRoutes from "./routes/upload.js";
 import stripeRoutes from "./routes/stripe.js";
 import webhookRoutes from "./routes/webhooks.js";
 import authRoutes from "./routes/auth.js";
+import emailGateRoutes from "./routes/emailGate.js";
 import blogRoutes from "./routes/blog.js";
 import contactRoutes from "./routes/contact.js";
 import bankRequestRoutes from "./routes/bankRequest.js";
@@ -24,6 +25,7 @@ import manualExtractRoutes from "./routes/manualExtract.js";
 import { ocrService } from "./services/ocrService.js";
 import { startPublishScheduler } from "./jobs/publishScheduled.js";
 import { startEmailCampaignScheduler } from "./jobs/emailCampaigns.js";
+import { startCleanupScheduler } from "./jobs/cleanupPendingConversions.js";
 
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -100,6 +102,7 @@ app.get("/health", (_req: Request, res: Response) => {
 
 // API routes
 app.use("/api/auth", authRoutes);
+app.use("/api/auth", emailGateRoutes); // Email gate for first-time conversions
 app.use("/api", uploadRoutes);
 app.use("/api", ipUsageRoutes);
 app.use("/api", manualExtractRoutes);
@@ -176,6 +179,9 @@ app.listen(PORT, async () => {
 
   // Start email campaign scheduler
   startEmailCampaignScheduler();
+
+  // Start cleanup scheduler for expired pending conversions
+  startCleanupScheduler();
 });
 
 // Graceful shutdown

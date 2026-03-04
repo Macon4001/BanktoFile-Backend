@@ -5,6 +5,8 @@ import { CSVGenerator } from "../services/csvGenerator.js";
 import { XLSXGenerator } from "../services/xlsxGenerator.js";
 import { ocrService } from "../services/ocrService.js";
 import { ParsedStatement } from "../types/index.js";
+import { pool } from "../db/postgres.js";
+import crypto from "crypto";
 
 export class UploadController {
   private pdfParser: PDFParser;
@@ -150,46 +152,79 @@ export class UploadController {
       // Get requested format from query parameter (default to CSV)
       const format = (req.query.format as string)?.toLowerCase() || 'csv';
 
-      // Always generate CSV for preview
+      // Always generate CSV
       const csv = this.csvGenerator.generateCSV(parsedData.transactions);
 
+      // Generate XLSX if requested
+      let xlsxBase64: string | null = null;
+      if (format === 'xlsx') {
+        const xlsxBuffer = this.xlsxGenerator.generateXLSX(parsedData.transactions);
+        xlsxBase64 = xlsxBuffer.toString('base64');
+      }
+
+      // Generate unique session token for this conversion
+      const sessionToken = crypto.randomUUID();
+
+      // Extract metadata for preview
+      // Determine date range from transactions
+      const sortedTransactions = [...parsedData.transactions].sort((a, b) =>
+        new Date(a.date).getTime() - new Date(b.date).getTime()
+      );
+      const startDate = sortedTransactions.length > 0 ? sortedTransactions[0].date : undefined;
+      const endDate = sortedTransactions.length > 0 ? sortedTransactions[sortedTransactions.length - 1].date : undefined;
+
+      const metadata = {
+        transactionCount: parsedData.transactions.length,
+        bankName: parsedData.metadata?.bankName || 'Unknown Bank',
+        startDate,
+        endDate,
+        accountNumber: parsedData.metadata?.accountNumber,
+        usedOCR: parsedData.usedOCR || false,
+        ocrConfidence: parsedData.confidence,
+      };
+
+      // Store the conversion in pending_conversions table
+      await pool.query(
+        `INSERT INTO pending_conversions
+         (session_token, file_name, csv_data, xlsx_data, transactions, metadata, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, NOW() + INTERVAL '24 hours')`,
+        [
+          sessionToken,
+          file.originalname,
+          csv,
+          xlsxBase64,
+          JSON.stringify(parsedData.transactions),
+          JSON.stringify(metadata)
+        ]
+      );
+
+      console.log(`✅ Stored pending conversion with session token: ${sessionToken}`);
+
       // If we successfully extracted transactions, don't send non-UK bank warning
-      // The parser successfully handled it, so no need to warn the user
       const shouldIncludeBankDetection = parsedData.bankDetection &&
         parsedData.transactions.length === 0;
 
-      if (format === 'xlsx') {
-        // Also generate XLSX
-        const xlsxBuffer = this.xlsxGenerator.generateXLSX(parsedData.transactions);
-
-        res.status(200).json({
-          success: true,
-          csv, // For preview
-          xlsx: xlsxBuffer.toString('base64'), // For download
-          transactions: parsedData.transactions, // Include structured transaction data
-          rawContent,
+      // Return preview data (NOT the full CSV/XLSX)
+      res.status(200).json({
+        success: true,
+        sessionToken,
+        requiresEmailGate: true,
+        preview: {
           transactionCount: parsedData.transactions.length,
-          metadata: parsedData.metadata,
-          format: 'xlsx',
+          bankName: metadata.bankName,
+          dateRange: {
+            start: metadata.startDate,
+            end: metadata.endDate,
+          },
+          accountNumber: metadata.accountNumber,
+          // Include first 5 transactions as a sample
+          sampleTransactions: parsedData.transactions.slice(0, 5),
           usedOCR: parsedData.usedOCR || false,
           ocrConfidence: parsedData.confidence,
-          bankDetection: shouldIncludeBankDetection ? parsedData.bankDetection : undefined,
-        });
-      } else {
-        // CSV only
-        res.status(200).json({
-          success: true,
-          csv,
-          transactions: parsedData.transactions, // Include structured transaction data
-          rawContent,
-          transactionCount: parsedData.transactions.length,
-          metadata: parsedData.metadata,
-          format: 'csv',
-          usedOCR: parsedData.usedOCR || false,
-          ocrConfidence: parsedData.confidence,
-          bankDetection: shouldIncludeBankDetection ? parsedData.bankDetection : undefined,
-        });
-      }
+        },
+        format,
+        bankDetection: shouldIncludeBankDetection ? parsedData.bankDetection : undefined,
+      });
     } catch (error) {
       console.error("=== UPLOAD ERROR ===");
       console.error("Error:", error);
