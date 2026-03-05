@@ -183,7 +183,38 @@ export class UploadController {
       const clientIp = getClientIp(req);
       console.log(`📍 Client IP: ${clientIp}`);
 
-      // Check if this IP already has a pending conversion (to prevent refresh abuse)
+      // Get user ID from request (if authenticated)
+      const userId = (req.headers['x-user-id'] as string) || (req.query.userId as string);
+      const isAuthenticated = !!userId;
+
+      console.log(`🔐 User authenticated: ${isAuthenticated}, userId: ${userId || 'none'}`);
+
+      // If user is authenticated, skip email gate and return data directly (legacy flow)
+      if (isAuthenticated) {
+        console.log('✅ Authenticated user - returning data directly (no email gate)');
+
+        // Store data based on format
+        const shouldIncludeBankDetection = parsedData.bankDetection &&
+          parsedData.transactions.length === 0;
+
+        res.status(200).json({
+          success: true,
+          csv,
+          xlsx: xlsxBase64,
+          transactions: parsedData.transactions,
+          rawContent,
+          transactionCount: parsedData.transactions.length,
+          metadata: parsedData.metadata,
+          format,
+          usedOCR: parsedData.usedOCR || false,
+          ocrConfidence: parsedData.confidence,
+          bankDetection: shouldIncludeBankDetection ? parsedData.bankDetection : undefined,
+          requiresEmailGate: false, // Authenticated users skip email gate
+        });
+        return;
+      }
+
+      // For anonymous users: Check if this IP already has a pending conversion (to prevent refresh abuse)
       const existingPending = await pool.query(
         `SELECT session_token, created_at FROM pending_conversions
          WHERE client_ip = $1 AND expires_at > NOW()
