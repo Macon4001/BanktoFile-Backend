@@ -159,6 +159,7 @@ export interface PendingConversion {
   xlsx_data?: string | null;
   transactions: unknown; // JSONB array of transactions
   metadata?: unknown | null; // JSONB object with bank name, date range, etc.
+  client_ip?: string | null; // Client IP to prevent refresh abuse
   created_at: Date;
   expires_at: Date;
 }

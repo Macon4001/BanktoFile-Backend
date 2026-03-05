@@ -162,6 +162,51 @@ export class UploadController {
         xlsxBase64 = xlsxBuffer.toString('base64');
       }
 
+      // Get client IP (for anonymous user tracking)
+      const getClientIp = (req: Request): string => {
+        const forwardedFor = req.headers['x-forwarded-for'];
+        if (forwardedFor) {
+          const ips = Array.isArray(forwardedFor) ? forwardedFor[0] : forwardedFor;
+          return ips.split(',')[0].trim();
+        }
+        const realIp = req.headers['x-real-ip'];
+        if (realIp) {
+          return Array.isArray(realIp) ? realIp[0] : realIp;
+        }
+        const cfConnectingIp = req.headers['cf-connecting-ip'];
+        if (cfConnectingIp) {
+          return Array.isArray(cfConnectingIp) ? cfConnectingIp[0] : cfConnectingIp;
+        }
+        return req.socket.remoteAddress || 'unknown';
+      };
+
+      const clientIp = getClientIp(req);
+      console.log(`📍 Client IP: ${clientIp}`);
+
+      // Check if this IP already has a pending conversion (to prevent refresh abuse)
+      const existingPending = await pool.query(
+        `SELECT session_token, created_at FROM pending_conversions
+         WHERE client_ip = $1 AND expires_at > NOW()
+         ORDER BY created_at DESC LIMIT 1`,
+        [clientIp]
+      );
+
+      if (existingPending.rows.length > 0) {
+        const existing = existingPending.rows[0];
+        const ageMinutes = Math.floor((Date.now() - new Date(existing.created_at).getTime()) / 60000);
+
+        console.log(`⚠️  IP ${clientIp} already has a pending conversion (${ageMinutes} minutes old)`);
+        console.log(`   Returning existing session token: ${existing.session_token}`);
+
+        // Return existing session token (don't create duplicate)
+        res.status(400).json({
+          error: 'You already have a conversion in progress. Please complete the email step to download your file, or wait a few minutes and try again.',
+          code: 'PENDING_CONVERSION_EXISTS',
+          existingSessionToken: existing.session_token,
+        });
+        return;
+      }
+
       // Generate unique session token for this conversion
       const sessionToken = crypto.randomUUID();
 
@@ -183,18 +228,19 @@ export class UploadController {
         ocrConfidence: parsedData.confidence,
       };
 
-      // Store the conversion in pending_conversions table
+      // Store the conversion in pending_conversions table with client IP
       await pool.query(
         `INSERT INTO pending_conversions
-         (session_token, file_name, csv_data, xlsx_data, transactions, metadata, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW() + INTERVAL '24 hours')`,
+         (session_token, file_name, csv_data, xlsx_data, transactions, metadata, client_ip, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '24 hours')`,
         [
           sessionToken,
           file.originalname,
           csv,
           xlsxBase64,
           JSON.stringify(parsedData.transactions),
-          JSON.stringify(metadata)
+          JSON.stringify(metadata),
+          clientIp
         ]
       );
 
