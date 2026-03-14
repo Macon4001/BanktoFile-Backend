@@ -437,15 +437,16 @@ export class PostgresStore {
         const { plan } = user;
 
         if (plan === 'free') {
-          // Free users: increment pages used today (daily limit based on pages)
-          const newPagesUsed = user.pages_used_today + pagesConverted;
+          // Free users: increment FILES used today (daily limit is 3 files per day, not pages)
+          // NOTE: pages_used_today actually tracks FILES for free users (confusing legacy naming)
+          const newFilesUsed = user.pages_used_today + 1; // Increment by 1 file
           await client.query(
-            'UPDATE users SET pages_used_today = pages_used_today + $1, last_conversion_at = NOW() WHERE id = $2',
-            [pagesConverted, userId]
+            'UPDATE users SET pages_used_today = pages_used_today + 1, last_conversion_at = NOW() WHERE id = $2',
+            [userId]
           );
 
           // Check if user just hit their limit
-          if (newPagesUsed >= user.daily_pages_limit && user.pages_used_today < user.daily_pages_limit) {
+          if (newFilesUsed >= user.daily_pages_limit && user.pages_used_today < user.daily_pages_limit) {
             userHitLimit = true;
             // Mark limit_hit_at timestamp if not already set
             if (!user.limit_hit_at) {
@@ -507,6 +508,7 @@ export class PostgresStore {
   }
 
   // Check if user can convert
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async canConvert(userId: string, pagesNeeded: number): Promise<boolean> {
     const client = await pool.connect();
     try {
@@ -554,8 +556,10 @@ export class PostgresStore {
 
       // Check limits
       if (user.plan === 'free') {
-        // Free users: check daily page limit
-        return (user.pages_used_today + pagesNeeded) <= user.daily_pages_limit;
+        // Free users: check daily FILE limit (3 files per day)
+        // NOTE: pages_used_today actually tracks FILES for free users (legacy naming)
+        // NOTE: pagesNeeded parameter is ignored for free users - we only check file count
+        return (user.pages_used_today + 1) <= user.daily_pages_limit;
       } else {
         // Paid users: check monthly FILE limit (can they upload 1 more file?)
         return (user.files_used_monthly + 1) <= user.monthly_files_limit;

@@ -117,14 +117,19 @@ router.post('/email-gate', async (req: Request, res: Response) => {
     await db.updateUser(user.id, updateData);
 
     // Log the conversion in conversion_logs table
-    const metadata = pendingConversion.metadata as { transactionCount?: number; bankName?: string } | null;
+    const metadata = pendingConversion.metadata as {
+      transactionCount?: number;
+      pageCount?: number;
+      bankName?: string;
+    } | null;
     const transactionCount = metadata?.transactionCount || 0;
+    const pageCount = metadata?.pageCount || 1; // Use actual PDF page count
 
     await pool.query(
       `INSERT INTO conversion_logs
        (user_id, file_name, pages_converted, conversion_type, timestamp)
        VALUES ($1, $2, $3, $4, NOW())`,
-      [user.id, pendingConversion.file_name, transactionCount, 'pdf_to_csv']
+      [user.id, pendingConversion.file_name, pageCount, 'pdf_to_csv'] // Log page count, not transaction count
     );
 
     // Increment user's file usage counter

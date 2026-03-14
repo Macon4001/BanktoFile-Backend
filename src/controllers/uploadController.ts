@@ -249,8 +249,13 @@ export class UploadController {
       const startDate = sortedTransactions.length > 0 ? sortedTransactions[0].date : undefined;
       const endDate = sortedTransactions.length > 0 ? sortedTransactions[sortedTransactions.length - 1].date : undefined;
 
+      // Get page count from request (set by countPagesMiddleware)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const pageCount = (req as any).pagesInFile || 1;
+
       const metadata = {
         transactionCount: parsedData.transactions.length,
+        pageCount, // Store actual PDF page count
         bankName: parsedData.metadata?.bankName || 'Unknown Bank',
         startDate,
         endDate,
