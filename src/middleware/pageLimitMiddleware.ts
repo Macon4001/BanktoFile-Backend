@@ -56,9 +56,12 @@ export async function countPagesMiddleware(req: Request, res: Response, next: Ne
     next();
   } catch (error) {
     console.error('📊 [COUNT_PAGES] ❌ Error counting pages:', error);
-    // If we can't count pages, assume 1 page to not block the user
-    req.pagesInFile = 1;
-    next();
+    // SECURITY: Block upload if we can't count pages (prevents bypass via corrupted PDFs)
+    return res.status(400).json({
+      error: 'Unable to process PDF',
+      code: 'PDF_PARSING_ERROR',
+      message: 'We could not read this PDF file. It may be corrupted, password-protected, or in an unsupported format. Please try a different file.',
+    });
   }
 }
 
