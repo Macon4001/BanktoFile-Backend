@@ -11,6 +11,7 @@ import stripeRoutes from "./routes/stripe.js";
 import webhookRoutes from "./routes/webhooks.js";
 import authRoutes from "./routes/auth.js";
 import emailGateRoutes from "./routes/emailGate.js";
+import passwordResetRoutes from "./routes/passwordReset.js";
 import blogRoutes from "./routes/blog.js";
 import contactRoutes from "./routes/contact.js";
 import bankRequestRoutes from "./routes/bankRequest.js";
@@ -103,6 +104,7 @@ app.get("/health", (_req: Request, res: Response) => {
 // API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/auth", emailGateRoutes); // Email gate for first-time conversions
+app.use("/api/auth", passwordResetRoutes); // Password reset flow
 app.use("/api", uploadRoutes);
 app.use("/api", ipUsageRoutes);
 app.use("/api", manualExtractRoutes);

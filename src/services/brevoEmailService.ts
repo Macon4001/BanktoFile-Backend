@@ -991,6 +991,284 @@ Consider adding support for this bank if you see multiple requests.
       textContent,
     });
   }
+
+  /**
+   * Password Reset Email
+   * Subject: "Reset your BankToFile password"
+   * Trigger: User requests password reset
+   */
+  async sendPasswordResetEmail(
+    userEmail: string,
+    userName: string,
+    resetUrl: string
+  ): Promise<void> {
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #fff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px; }
+    .button { display: inline-block; background: #10b981; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
+    .button:hover { background: #059669; }
+    .warning { background: #fef3c7; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b; }
+    .footer { text-align: center; margin-top: 30px; font-size: 14px; color: #6b7280; }
+    .security-notice { background: #f3f4f6; padding: 15px; border-radius: 6px; margin-top: 20px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin: 0; font-size: 28px;">🔐 Password Reset Request</h1>
+    </div>
+    <div class="content">
+      <p>Hi ${userName},</p>
+
+      <p>We received a request to reset your password for your BankToFile account.</p>
+
+      <p>Click the button below to reset your password:</p>
+
+      <div style="text-align: center;">
+        <a href="${resetUrl}" class="button">Reset Password</a>
+      </div>
+
+      <p style="margin-top: 20px; font-size: 14px; color: #6b7280;">
+        Or copy and paste this link into your browser:<br>
+        <a href="${resetUrl}" style="color: #10b981; word-break: break-all;">${resetUrl}</a>
+      </p>
+
+      <div class="warning">
+        <strong>⏰ This link expires in 1 hour</strong><br>
+        For security reasons, this password reset link will only work once and will expire in 1 hour.
+      </div>
+
+      <div class="security-notice">
+        <strong>🛡️ Didn't request this?</strong><br>
+        If you didn't request a password reset, you can safely ignore this email. Your password will remain unchanged.
+      </div>
+    </div>
+    <div class="footer">
+      <p>This email was sent by BankToFile</p>
+      <p>
+        <a href="${this.frontendUrl}/contact" style="color: #10b981; text-decoration: none;">Contact Support</a> |
+        <a href="${this.frontendUrl}/privacy" style="color: #10b981; text-decoration: none;">Privacy Policy</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const textContent = `
+Hi ${userName},
+
+We received a request to reset your password for your BankToFile account.
+
+Reset your password by clicking this link:
+${resetUrl}
+
+This link expires in 1 hour for security reasons.
+
+Didn't request this?
+If you didn't request a password reset, you can safely ignore this email. Your password will remain unchanged.
+
+---
+BankToFile
+${this.frontendUrl}
+    `;
+
+    await this.sendEmail({
+      to: userEmail,
+      toName: userName,
+      subject: 'Reset your BankToFile password',
+      htmlContent,
+      textContent,
+    });
+  }
+
+  /**
+   * Password Reset Confirmation Email
+   * Subject: "Your BankToFile password has been reset"
+   * Trigger: User successfully resets password
+   */
+  async sendPasswordResetConfirmationEmail(
+    userEmail: string,
+    userName: string
+  ): Promise<void> {
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #fff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px; }
+    .button { display: inline-block; background: #10b981; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
+    .success { background: #ecfdf5; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid: #10b981; }
+    .security-notice { background: #fef2f2; padding: 15px; border-radius: 6px; margin-top: 20px; border-left: 4px solid #ef4444; }
+    .footer { text-align: center; margin-top: 30px; font-size: 14px; color: #6b7280; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin: 0; font-size: 28px;">✅ Password Reset Successful</h1>
+    </div>
+    <div class="content">
+      <p>Hi ${userName},</p>
+
+      <div class="success">
+        <strong>Your password has been successfully reset!</strong>
+      </div>
+
+      <p>You can now log in to BankToFile using your new password.</p>
+
+      <div style="text-align: center;">
+        <a href="${this.frontendUrl}/login" class="button">Log In Now</a>
+      </div>
+
+      <div class="security-notice">
+        <strong>⚠️ Didn't make this change?</strong><br>
+        If you didn't reset your password, please contact our support team immediately. Someone may have unauthorized access to your account.
+        <br><br>
+        <a href="${this.frontendUrl}/contact" style="color: #ef4444; font-weight: 600;">Contact Support →</a>
+      </div>
+    </div>
+    <div class="footer">
+      <p>This email was sent by BankToFile</p>
+      <p>
+        <a href="${this.frontendUrl}/contact" style="color: #10b981; text-decoration: none;">Contact Support</a> |
+        <a href="${this.frontendUrl}/privacy" style="color: #10b981; text-decoration: none;">Privacy Policy</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const textContent = `
+Hi ${userName},
+
+Your password has been successfully reset!
+
+You can now log in to BankToFile using your new password.
+
+Log in here: ${this.frontendUrl}/login
+
+Didn't make this change?
+If you didn't reset your password, please contact our support team immediately at ${this.frontendUrl}/contact
+
+---
+BankToFile
+${this.frontendUrl}
+    `;
+
+    await this.sendEmail({
+      to: userEmail,
+      toName: userName,
+      subject: 'Your BankToFile password has been reset',
+      htmlContent,
+      textContent,
+    });
+  }
+
+  /**
+   * Password Reset OAuth Email (for Google OAuth users)
+   * Subject: "Password reset not applicable - you use Google Sign-In"
+   * Trigger: OAuth user tries to reset password
+   */
+  async sendPasswordResetOAuthEmail(
+    userEmail: string,
+    userName: string
+  ): Promise<void> {
+    const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #fff; padding: 30px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px; }
+    .button { display: inline-block; background: #10b981; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; font-weight: 600; margin: 20px 0; }
+    .info { background: #dbeafe; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #3b82f6; }
+    .footer { text-align: center; margin-top: 30px; font-size: 14px; color: #6b7280; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin: 0; font-size: 28px;">ℹ️ Password Reset Request</h1>
+    </div>
+    <div class="content">
+      <p>Hi ${userName},</p>
+
+      <p>We received a password reset request for your BankToFile account.</p>
+
+      <div class="info">
+        <strong>You signed up with Google</strong><br>
+        Your account uses Google Sign-In, so you don't have a BankToFile password to reset.
+      </div>
+
+      <p>To access your account, simply click "Continue with Google" on our login page:</p>
+
+      <div style="text-align: center;">
+        <a href="${this.frontendUrl}/login" class="button">Sign In with Google</a>
+      </div>
+
+      <p style="margin-top: 20px; font-size: 14px; color: #6b7280;">
+        Your Google account password is managed by Google. If you need to reset your Google password, visit
+        <a href="https://myaccount.google.com/security" style="color: #10b981;">Google Account Security</a>.
+      </p>
+    </div>
+    <div class="footer">
+      <p>This email was sent by BankToFile</p>
+      <p>
+        <a href="${this.frontendUrl}/contact" style="color: #10b981; text-decoration: none;">Contact Support</a> |
+        <a href="${this.frontendUrl}/privacy" style="color: #10b981; text-decoration: none;">Privacy Policy</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    const textContent = `
+Hi ${userName},
+
+We received a password reset request for your BankToFile account.
+
+You signed up with Google
+Your account uses Google Sign-In, so you don't have a BankToFile password to reset.
+
+To access your account, simply click "Continue with Google" on our login page:
+${this.frontendUrl}/login
+
+Your Google account password is managed by Google. If you need to reset your Google password, visit:
+https://myaccount.google.com/security
+
+---
+BankToFile
+${this.frontendUrl}
+    `;
+
+    await this.sendEmail({
+      to: userEmail,
+      toName: userName,
+      subject: 'Password reset not applicable - you use Google Sign-In',
+      htmlContent,
+      textContent,
+    });
+  }
 }
 
 // Export singleton instance
