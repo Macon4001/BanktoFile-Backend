@@ -6,6 +6,8 @@ export interface Event {
   session_id: string;
   event_name: string;
   metadata?: Record<string, unknown>;
+  user_id?: string;
+  user_email?: string;
   created_at: Date;
 }
 
@@ -36,15 +38,23 @@ export class EventsService {
   async createEvent(
     sessionId: string,
     eventName: string,
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown>,
+    userId?: string,
+    userEmail?: string
   ): Promise<Event> {
     const client = await pool.connect();
     try {
       const result = await client.query<Event>(
-        `INSERT INTO events (session_id, event_name, metadata)
-         VALUES ($1, $2, $3)
+        `INSERT INTO events (session_id, event_name, metadata, user_id, user_email)
+         VALUES ($1, $2, $3, $4, $5)
          RETURNING *`,
-        [sessionId, eventName, metadata ? JSON.stringify(metadata) : null]
+        [
+          sessionId,
+          eventName,
+          metadata ? JSON.stringify(metadata) : null,
+          userId || null,
+          userEmail || null
+        ]
       );
       return result.rows[0];
     } finally {
@@ -104,15 +114,18 @@ export class EventsService {
   }
 
   /**
-   * Get recent events (last 100)
+   * Get recent events (last 100) with user information
    */
   async getRecentEvents(limit: number = 100): Promise<Event[]> {
     const client = await pool.connect();
     try {
       const result = await client.query<Event>(
-        `SELECT *
-         FROM events
-         ORDER BY created_at DESC
+        `SELECT
+          e.*,
+          u.name as user_name
+         FROM events e
+         LEFT JOIN users u ON e.user_id = u.id
+         ORDER BY e.created_at DESC
          LIMIT $1`,
         [limit]
       );

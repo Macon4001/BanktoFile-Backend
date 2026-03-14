@@ -8,7 +8,7 @@ export class EventsController {
    */
   async createEvent(req: Request, res: Response): Promise<void> {
     try {
-      const { session_id, event_name, metadata } = req.body;
+      const { session_id, event_name, metadata, user_id, user_email } = req.body;
 
       // Validate required fields
       if (!session_id || !event_name) {
@@ -31,7 +31,9 @@ export class EventsController {
       const event = await eventsService.createEvent(
         session_id,
         event_name,
-        metadata
+        metadata,
+        user_id,  // Optional - will be null for anonymous users
+        user_email  // Optional - will be null for anonymous users
       );
 
       res.status(201).json({
