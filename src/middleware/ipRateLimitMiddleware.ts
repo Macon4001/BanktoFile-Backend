@@ -130,6 +130,13 @@ export function logIpConversionMiddleware(
       const userId = req.userId;
       const clientIp = req.clientIp || getClientIp(req);
 
+      // Skip conversion counting if this is a preview request
+      const isPreview = req.query.preview === 'true';
+      if (isPreview) {
+        console.log(`🔍 [IP_RATE_LIMIT] Skipping conversion count for preview request`);
+        return originalJson(body);
+      }
+
       // Only track IP conversions for anonymous users
       if (!userId && clientIp) {
         console.log(`📊 [IP_RATE_LIMIT] Logging conversion for IP: ${clientIp}`);

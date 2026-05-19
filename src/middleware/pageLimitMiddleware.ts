@@ -254,6 +254,13 @@ export function logConversionMiddleware(req: Request, res: Response, next: NextF
       const pagesConverted = req.pagesInFile || 1;
       const fileName = req.file?.originalname || 'unknown';
 
+      // Skip conversion counting if this is a preview request
+      const isPreview = req.query.preview === 'true';
+      if (isPreview) {
+        console.log(`🔍 [PAGE_LIMIT] Skipping conversion count for preview request`);
+        return originalJson(body);
+      }
+
       if (userId) {
         // Log conversion asynchronously
         db.logConversion(userId, fileName, pagesConverted).then((result) => {
