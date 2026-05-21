@@ -11,6 +11,7 @@ import {
   logIpConversionMiddleware,
 } from "../middleware/ipRateLimitMiddleware.js";
 import { checkFileSizeLimitMiddleware } from "../middleware/fileSizeLimitMiddleware.js";
+import { sessionRateLimitMiddleware } from "../middleware/sessionRateLimitMiddleware.js";
 
 const router = Router();
 const uploadController = new UploadController();
@@ -45,11 +46,12 @@ router.post(
   "/upload",
   upload.single("file"),
   checkFileSizeLimitMiddleware, // Check file size limit based on user tier
-  checkIpRateLimitMiddleware,  // Check IP-based rate limiting first (for anonymous users)
+  sessionRateLimitMiddleware,   // Check session-based rate limiting (catches IP rotation attacks)
+  checkIpRateLimitMiddleware,   // Check IP-based rate limiting (for anonymous users)
   countPagesMiddleware,
   checkPageLimitMiddleware,
-  logIpConversionMiddleware,   // Log IP-based conversions (for anonymous users)
-  logConversionMiddleware,      // Log user-based conversions (for authenticated users)
+  logIpConversionMiddleware,    // Log IP-based conversions (for anonymous users)
+  logConversionMiddleware,       // Log user-based conversions (for authenticated users)
   (req, res) => {
     uploadController.handleUpload(req, res);
   }

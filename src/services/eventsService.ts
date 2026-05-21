@@ -8,6 +8,7 @@ export interface Event {
   metadata?: Record<string, unknown>;
   user_id?: string;
   user_email?: string;
+  ip_address?: string;
   created_at: Date;
 }
 
@@ -40,20 +41,22 @@ export class EventsService {
     eventName: string,
     metadata?: Record<string, unknown>,
     userId?: string,
-    userEmail?: string
+    userEmail?: string,
+    ipAddress?: string
   ): Promise<Event> {
     const client = await pool.connect();
     try {
       const result = await client.query<Event>(
-        `INSERT INTO events (session_id, event_name, metadata, user_id, user_email)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO events (session_id, event_name, metadata, user_id, user_email, ip_address)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
         [
           sessionId,
           eventName,
           metadata ? JSON.stringify(metadata) : null,
           userId || null,
-          userEmail || null
+          userEmail || null,
+          ipAddress || null
         ]
       );
       return result.rows[0];

@@ -441,7 +441,7 @@ export class PostgresStore {
           // NOTE: pages_used_today actually tracks FILES for free users (confusing legacy naming)
           const newFilesUsed = user.pages_used_today + 1; // Increment by 1 file
           await client.query(
-            'UPDATE users SET pages_used_today = pages_used_today + 1, last_conversion_at = NOW() WHERE id = $2',
+            'UPDATE users SET pages_used_today = pages_used_today + 1, last_conversion_at = NOW() WHERE id = $1',
             [userId]
           );
 

@@ -28,12 +28,24 @@ export class EventsController {
         return;
       }
 
+      // Extract IP address from request
+      const getClientIp = (req: Request): string => {
+        const forwardedFor = req.headers['x-forwarded-for'];
+        if (forwardedFor) {
+          const ips = typeof forwardedFor === 'string' ? forwardedFor.split(',') : forwardedFor;
+          return ips[0].trim();
+        }
+        return req.socket.remoteAddress || 'unknown';
+      };
+      const ipAddress = getClientIp(req);
+
       const event = await eventsService.createEvent(
         session_id,
         event_name,
         metadata,
         user_id,  // Optional - will be null for anonymous users
-        user_email  // Optional - will be null for anonymous users
+        user_email,  // Optional - will be null for anonymous users
+        ipAddress  // Track IP address for abuse detection
       );
 
       res.status(201).json({
