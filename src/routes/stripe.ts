@@ -1,15 +1,53 @@
 import { Router, Request, Response } from 'express';
-import { stripe, PRICING_TIERS, PlanType } from '../config/stripe.js';
+import { stripe, PlanType } from '../config/stripe.js';
 import { db } from '../db/postgres.js';
 import jwt from 'jsonwebtoken';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this-in-production';
 
+/**
+ * Get the correct Stripe Price ID based on plan, billing interval, and currency
+ * Returns the appropriate price ID from environment variables
+ */
+function getPriceIdForCurrency(plan: PlanType, billingInterval: string, currency: string): string | null {
+  // Map currency to environment variable suffix
+  const currencySuffix = currency === 'GBP' ? '' : `_${currency}`;
+
+  // Build the environment variable name
+  // Examples:
+  // - STRIPE_BASIC_PRICE_ID (GBP monthly - default)
+  // - STRIPE_BASIC_YEARLY_PRICE_ID (GBP yearly)
+  // - STRIPE_BASIC_PRICE_ID_USD (USD monthly)
+  // - STRIPE_BASIC_YEARLY_PRICE_ID_USD (USD yearly)
+
+  const planUpper = plan.toUpperCase();
+  let envVarName: string;
+
+  if (billingInterval === 'yearly') {
+    envVarName = `STRIPE_${planUpper}_YEARLY_PRICE_ID${currencySuffix}`;
+  } else {
+    envVarName = `STRIPE_${planUpper}_PRICE_ID${currencySuffix}`;
+  }
+
+  const priceId = process.env[envVarName];
+
+  // Fallback: if specific currency not found, try GBP as default
+  if (!priceId && currency !== 'GBP') {
+    console.warn(`Price ID not found for ${envVarName}, falling back to GBP`);
+    const gbpEnvVarName = billingInterval === 'yearly'
+      ? `STRIPE_${planUpper}_YEARLY_PRICE_ID`
+      : `STRIPE_${planUpper}_PRICE_ID`;
+    return process.env[gbpEnvVarName] || null;
+  }
+
+  return priceId || null;
+}
+
 // Create Checkout Session
 router.post('/create-checkout-session', async (req: Request, res: Response) => {
   try {
-    const { plan, email, userId, billingInterval = 'monthly' } = req.body;
+    const { plan, email, userId, billingInterval = 'monthly', currency = 'GBP' } = req.body;
 
     if (!plan || !email) {
       return res.status(400).json({ error: 'Plan and email are required' });
@@ -25,15 +63,20 @@ router.post('/create-checkout-session', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid billing interval' });
     }
 
-    const planDetails = PRICING_TIERS[plan as PlanType];
+    // Validate currency
+    const supportedCurrencies = ['GBP', 'USD', 'CAD', 'EUR', 'AUD'];
+    if (!supportedCurrencies.includes(currency)) {
+      return res.status(400).json({ error: 'Unsupported currency' });
+    }
 
-    // Select the correct price ID based on billing interval
-    const priceId = billingInterval === 'yearly'
-      ? ('yearlyPriceId' in planDetails ? planDetails.yearlyPriceId : null)
-      : planDetails.priceId;
+    // Select the correct price ID based on billing interval and currency
+    const priceId = getPriceIdForCurrency(plan as PlanType, billingInterval, currency);
 
     if (!priceId) {
-      return res.status(400).json({ error: 'Price ID not configured for selected plan and billing interval' });
+      return res.status(400).json({
+        error: 'Price ID not configured for selected plan, billing interval, and currency',
+        fallback: 'GBP' // Suggest fallback to GBP
+      });
     }
 
     // Create or get user
@@ -58,6 +101,7 @@ router.post('/create-checkout-session', async (req: Request, res: Response) => {
         userId: user.id,
         plan: plan,
         billingInterval: billingInterval,
+        currency: currency,
       },
       success_url: `${process.env.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${process.env.FRONTEND_URL}/pricing?canceled=true`,
@@ -66,6 +110,7 @@ router.post('/create-checkout-session', async (req: Request, res: Response) => {
           userId: user.id,
           plan: plan,
           billingInterval: billingInterval,
+          currency: currency,
         },
       },
     });
