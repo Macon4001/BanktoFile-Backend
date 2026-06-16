@@ -6,6 +6,7 @@ import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
 import { WiseCoordinateParser } from "./wiseCoordinateParser.js";
 import { CoopBankCoordinateParser } from "./coopBankCoordinateParser.js";
 import { LloydsBusinessParser } from "./lloydsBusinessParser.js";
+import { CapitalOneParser } from "./capitalOneParser.js";
 import { MettleNatwestCoordinateParser } from "./mettleNatwestCoordinateParser.js";
 import { bankDetectionService, BankDetectionResult } from "./bankDetectionService.js";
 import { checkParsingAccuracy, logSanityCheckResult } from "../utils/parsingAccuracyCheck.js";
@@ -36,6 +37,7 @@ export class PDFParser {
   private wiseParser: WiseCoordinateParser;
   private coopBankParser: CoopBankCoordinateParser;
   private lloydsBusinessParser: LloydsBusinessParser;
+  private capitalOneParser: CapitalOneParser;
   private mettleNatwestParser: MettleNatwestCoordinateParser;
 
   constructor() {
@@ -45,6 +47,7 @@ export class PDFParser {
     this.wiseParser = new WiseCoordinateParser();
     this.coopBankParser = new CoopBankCoordinateParser();
     this.lloydsBusinessParser = new LloydsBusinessParser();
+    this.capitalOneParser = new CapitalOneParser();
     this.mettleNatwestParser = new MettleNatwestCoordinateParser();
   }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean; bankDetection?: BankDetectionResult }> {
@@ -343,6 +346,13 @@ export class PDFParser {
   private async extractTransactions(text: string, buffer?: Buffer): Promise<Transaction[]> {
     const transactions: Transaction[] = [];
     const lines = text.split("\n");
+
+    // Check if this is a Capital One statement (check early before generic parsers)
+    const capitalOneTransactions = this.capitalOneParser.parseStatement(text);
+    if (capitalOneTransactions.length > 0) {
+      console.log(`✅ Detected Capital One - extracted ${capitalOneTransactions.length} transactions`);
+      return capitalOneTransactions;
+    }
 
     // Check if this is a Lloyds Business Account (before RBS to avoid conflicts)
     const lloydsBusinessTransactions = this.lloydsBusinessParser.parseStatement(text);
