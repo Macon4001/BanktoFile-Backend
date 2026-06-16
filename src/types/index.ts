@@ -11,6 +11,11 @@ export interface Transaction {
   amountOut?: number; // For manual extraction with separate in/out columns
 }
 
+export interface CapitalOneSection {
+  title: string;
+  transactions: Transaction[];
+}
+
 export interface ParsedStatement {
   transactions: Transaction[];
   metadata?: {
@@ -18,4 +23,6 @@ export interface ParsedStatement {
     statementPeriod?: string;
     bankName?: string;
   };
+  capitalOneSections?: CapitalOneSection[]; // For Capital One statements with multiple sections
+  isCapitalOne?: boolean; // Flag to indicate Capital One statement
 }

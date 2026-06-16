@@ -1,5 +1,5 @@
 import * as pdfParse from "pdf-parse";
-import { Transaction, ParsedStatement } from "../types/index.js";
+import { Transaction, ParsedStatement, CapitalOneSection } from "../types/index.js";
 import { MetroBankCoordinateParser } from "./metroBankCoordinateParser.js";
 import { GenericCoordinateParser } from "./genericCoordinateParser.js";
 import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
@@ -39,6 +39,10 @@ export class PDFParser {
   private lloydsBusinessParser: LloydsBusinessParser;
   private capitalOneParser: CapitalOneParser;
   private mettleNatwestParser: MettleNatwestCoordinateParser;
+
+  // Temporary storage for Capital One sections during parsing
+  private capitalOneSections?: CapitalOneSection[];
+  private isCapitalOne: boolean = false;
 
   constructor() {
     this.metroBankParser = new MetroBankCoordinateParser();
@@ -228,11 +232,12 @@ export class PDFParser {
 
         // OR a numeric date with reasonable day/month values (not sort codes like 12-34-56)
         let isValidNumericDate = false;
-        const numericMatch = t.date.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+        const numericMatch = t.date.match(/^(\d{1,2})[-/](\d{1,2})(?:[-/](\d{2,4}))?$/);
         if (numericMatch) {
           const day = parseInt(numericMatch[1]);
           const month = parseInt(numericMatch[2]);
           // Reasonable ranges: day 1-31, month 1-12 (not 34, 56, etc.)
+          // Accept both MM/DD and MM/DD/YYYY formats (Capital One uses MM/DD)
           isValidNumericDate = (day >= 1 && day <= 31) && (month >= 1 && month <= 12);
         }
 
@@ -277,6 +282,8 @@ export class PDFParser {
         rawText: text,
         needsOCR,
         bankDetection,
+        capitalOneSections: this.capitalOneSections,
+        isCapitalOne: this.isCapitalOne,
       };
     } catch (error) {
       console.error("Error parsing PDF:", error);
@@ -348,10 +355,15 @@ export class PDFParser {
     const lines = text.split("\n");
 
     // Check if this is a Capital One statement (check early before generic parsers)
-    const capitalOneTransactions = this.capitalOneParser.parseStatement(text);
-    if (capitalOneTransactions.length > 0) {
-      console.log(`✅ Detected Capital One - extracted ${capitalOneTransactions.length} transactions`);
-      return capitalOneTransactions;
+    const capitalOneResult = this.capitalOneParser.parseStatementWithSections(text);
+    if (capitalOneResult.allTransactions.length > 0) {
+      console.log(`✅ Detected Capital One - extracted ${capitalOneResult.allTransactions.length} transactions across ${capitalOneResult.sections.length} sections`);
+
+      // Store sections for later use in parsePDF
+      this.capitalOneSections = capitalOneResult.sections;
+      this.isCapitalOne = true;
+
+      return capitalOneResult.allTransactions;
     }
 
     // Check if this is a Lloyds Business Account (before RBS to avoid conflicts)

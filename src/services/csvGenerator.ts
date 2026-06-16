@@ -1,5 +1,6 @@
 import { stringify } from "csv-stringify/sync";
 import { Transaction } from "../types/index.js";
+import { CapitalOneSection } from "./capitalOneParser.js";
 
 export class CSVGenerator {
   generateCSV(transactions: Transaction[]): string {
@@ -43,5 +44,66 @@ export class CSVGenerator {
     console.log('=== END CSV ===');
 
     return csv;
+  }
+
+  /**
+   * Generate a multi-table CSV for Capital One statements with sections
+   */
+  generateCapitalOneSectionedCSV(sections: CapitalOneSection[]): string {
+    console.log('=== CSV GENERATOR: Generating Capital One sectioned CSV ===');
+    console.log(`   Sections: ${sections.length}`);
+
+    const csvParts: string[] = [];
+
+    sections.forEach((section, sectionIdx) => {
+      console.log(`   [Section ${sectionIdx + 1}] ${section.title}: ${section.transactions.length} transactions`);
+
+      // Add section header
+      csvParts.push(`\n=== ${section.title} ===\n`);
+
+      // Determine columns based on section type
+      let columns: string[];
+      let records: Array<Record<string, string>>;
+
+      if (section.title === 'Checks') {
+        // Checks section: Date, Check No, Amount
+        columns = ["Date", "Check No", "Amount"];
+        records = section.transactions.map(t => {
+          // Extract check number from description (e.g., "Check 314" -> "314")
+          const checkNoMatch = t.description.match(/Check (\d+\*?)/);
+          const checkNo = checkNoMatch ? checkNoMatch[1] : '';
+
+          return {
+            Date: t.date,
+            "Check No": checkNo,
+            Amount: t.amount.toFixed(2)
+          };
+        });
+      } else {
+        // Deposits, Withdrawals, Debit/ATM: Date, Description, Amount
+        columns = ["Date", "Description", "Amount"];
+        records = section.transactions.map(t => ({
+          Date: t.date,
+          Description: t.description,
+          Amount: t.amount.toFixed(2)
+        }));
+      }
+
+      // Generate CSV for this section
+      const sectionCSV = stringify(records, {
+        header: true,
+        columns: columns,
+      });
+
+      csvParts.push(sectionCSV);
+    });
+
+    const finalCSV = csvParts.join('');
+
+    console.log('=== GENERATED SECTIONED CSV (first 2000 chars) ===');
+    console.log(finalCSV.substring(0, 2000));
+    console.log('=== END SECTIONED CSV ===');
+
+    return finalCSV;
   }
 }

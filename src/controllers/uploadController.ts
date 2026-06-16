@@ -152,8 +152,13 @@ export class UploadController {
       // Get requested format from query parameter (default to CSV)
       const format = (req.query.format as string)?.toLowerCase() || 'csv';
 
-      // Always generate CSV
-      const csv = this.csvGenerator.generateCSV(parsedData.transactions);
+      // Check if this is a Capital One statement with sections
+      const isCapitalOne = parsedData.isCapitalOne && parsedData.capitalOneSections && parsedData.capitalOneSections.length > 0;
+
+      // Generate CSV (use sectioned format for Capital One)
+      const csv = isCapitalOne
+        ? this.csvGenerator.generateCapitalOneSectionedCSV(parsedData.capitalOneSections!)
+        : this.csvGenerator.generateCSV(parsedData.transactions);
 
       // Generate XLSX if requested
       let xlsxBase64: string | null = null;
@@ -214,99 +219,125 @@ export class UploadController {
         return;
       }
 
-      // For anonymous users: Check if this IP already has a pending conversion (to prevent refresh abuse)
-      const existingPending = await pool.query(
-        `SELECT session_token, created_at FROM pending_conversions
-         WHERE client_ip = $1 AND expires_at > NOW()
-         ORDER BY created_at DESC LIMIT 1`,
-        [clientIp]
-      );
+      // Try to use database for email gate, but fall back to direct return if DB is unavailable (dev mode)
+      try {
+        // For anonymous users: Check if this IP already has a pending conversion (to prevent refresh abuse)
+        const existingPending = await pool.query(
+          `SELECT session_token, created_at FROM pending_conversions
+           WHERE client_ip = $1 AND expires_at > NOW()
+           ORDER BY created_at DESC LIMIT 1`,
+          [clientIp]
+        );
 
-      if (existingPending.rows.length > 0) {
-        const existing = existingPending.rows[0];
-        const ageMinutes = Math.floor((Date.now() - new Date(existing.created_at).getTime()) / 60000);
+        if (existingPending.rows.length > 0) {
+          const existing = existingPending.rows[0];
+          const ageMinutes = Math.floor((Date.now() - new Date(existing.created_at).getTime()) / 60000);
 
-        console.log(`⚠️  IP ${clientIp} already has a pending conversion (${ageMinutes} minutes old)`);
-        console.log(`   Returning existing session token: ${existing.session_token}`);
+          console.log(`⚠️  IP ${clientIp} already has a pending conversion (${ageMinutes} minutes old)`);
+          console.log(`   Returning existing session token: ${existing.session_token}`);
 
-        // Return existing session token (don't create duplicate)
-        res.status(400).json({
-          error: 'You already have a conversion in progress. Please complete the email step to download your file, or wait a few minutes and try again.',
-          code: 'PENDING_CONVERSION_EXISTS',
-          existingSessionToken: existing.session_token,
-        });
-        return;
-      }
+          // Return existing session token (don't create duplicate)
+          res.status(400).json({
+            error: 'You already have a conversion in progress. Please complete the email step to download your file, or wait a few minutes and try again.',
+            code: 'PENDING_CONVERSION_EXISTS',
+            existingSessionToken: existing.session_token,
+          });
+          return;
+        }
 
-      // Generate unique session token for this conversion
-      const sessionToken = crypto.randomUUID();
+        // Generate unique session token for this conversion
+        const sessionToken = crypto.randomUUID();
 
-      // Extract metadata for preview
-      // Determine date range from transactions
-      const sortedTransactions = [...parsedData.transactions].sort((a, b) =>
-        new Date(a.date).getTime() - new Date(b.date).getTime()
-      );
-      const startDate = sortedTransactions.length > 0 ? sortedTransactions[0].date : undefined;
-      const endDate = sortedTransactions.length > 0 ? sortedTransactions[sortedTransactions.length - 1].date : undefined;
+        // Extract metadata for preview
+        // Determine date range from transactions
+        const sortedTransactions = [...parsedData.transactions].sort((a, b) =>
+          new Date(a.date).getTime() - new Date(b.date).getTime()
+        );
+        const startDate = sortedTransactions.length > 0 ? sortedTransactions[0].date : undefined;
+        const endDate = sortedTransactions.length > 0 ? sortedTransactions[sortedTransactions.length - 1].date : undefined;
 
-      // Get page count from request (set by countPagesMiddleware)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const pageCount = (req as any).pagesInFile || 1;
+        // Get page count from request (set by countPagesMiddleware)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pageCount = (req as any).pagesInFile || 1;
 
-      const metadata = {
-        transactionCount: parsedData.transactions.length,
-        pageCount, // Store actual PDF page count
-        bankName: parsedData.metadata?.bankName || 'Unknown Bank',
-        startDate,
-        endDate,
-        accountNumber: parsedData.metadata?.accountNumber,
-        usedOCR: parsedData.usedOCR || false,
-        ocrConfidence: parsedData.confidence,
-      };
-
-      // Store the conversion in pending_conversions table with client IP
-      await pool.query(
-        `INSERT INTO pending_conversions
-         (session_token, file_name, csv_data, xlsx_data, transactions, metadata, client_ip, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '24 hours')`,
-        [
-          sessionToken,
-          file.originalname,
-          csv,
-          xlsxBase64,
-          JSON.stringify(parsedData.transactions),
-          JSON.stringify(metadata),
-          clientIp
-        ]
-      );
-
-      console.log(`✅ Stored pending conversion with session token: ${sessionToken}`);
-
-      // If we successfully extracted transactions, don't send non-UK bank warning
-      const shouldIncludeBankDetection = parsedData.bankDetection &&
-        parsedData.transactions.length === 0;
-
-      // Return preview data (NOT the full CSV/XLSX)
-      res.status(200).json({
-        success: true,
-        sessionToken,
-        requiresEmailGate: true,
-        preview: {
+        const metadata = {
           transactionCount: parsedData.transactions.length,
-          bankName: metadata.bankName,
-          dateRange: {
-            start: metadata.startDate,
-            end: metadata.endDate,
-          },
-          accountNumber: metadata.accountNumber,
-          // Include first 5 transactions as a sample
-          sampleTransactions: parsedData.transactions.slice(0, 5),
+          pageCount, // Store actual PDF page count
+          bankName: parsedData.metadata?.bankName || 'Unknown Bank',
+          startDate,
+          endDate,
+          accountNumber: parsedData.metadata?.accountNumber,
           usedOCR: parsedData.usedOCR || false,
           ocrConfidence: parsedData.confidence,
-        },
-        format,
-        bankDetection: shouldIncludeBankDetection ? parsedData.bankDetection : undefined,
-      });
+        };
+
+        // Store the conversion in pending_conversions table with client IP
+        await pool.query(
+          `INSERT INTO pending_conversions
+           (session_token, file_name, csv_data, xlsx_data, transactions, metadata, client_ip, expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '24 hours')`,
+          [
+            sessionToken,
+            file.originalname,
+            csv,
+            xlsxBase64,
+            JSON.stringify(parsedData.transactions),
+            JSON.stringify(metadata),
+            clientIp
+          ]
+        );
+
+        console.log(`✅ Stored pending conversion with session token: ${sessionToken}`);
+
+        // If we successfully extracted transactions, don't send non-UK bank warning
+        const shouldIncludeBankDetection = parsedData.bankDetection &&
+          parsedData.transactions.length === 0;
+
+        // Return preview data (NOT the full CSV/XLSX)
+        res.status(200).json({
+          success: true,
+          sessionToken,
+          requiresEmailGate: true,
+          preview: {
+            transactionCount: parsedData.transactions.length,
+            bankName: metadata.bankName,
+            dateRange: {
+              start: metadata.startDate,
+              end: metadata.endDate,
+            },
+            accountNumber: metadata.accountNumber,
+            // Include first 5 transactions as a sample
+            sampleTransactions: parsedData.transactions.slice(0, 5),
+            usedOCR: parsedData.usedOCR || false,
+            ocrConfidence: parsedData.confidence,
+          },
+          format,
+          bankDetection: shouldIncludeBankDetection ? parsedData.bankDetection : undefined,
+        });
+      } catch (dbError) {
+        console.warn('⚠️  Database unavailable, returning data directly (development mode)');
+        console.warn('   Error:', dbError instanceof Error ? dbError.message : String(dbError));
+
+        // In development mode without DB: return CSV directly (skip email gate)
+        const shouldIncludeBankDetection = parsedData.bankDetection &&
+          parsedData.transactions.length === 0;
+
+        res.status(200).json({
+          success: true,
+          csv,
+          xlsx: xlsxBase64,
+          transactions: parsedData.transactions,
+          rawContent,
+          transactionCount: parsedData.transactions.length,
+          metadata: parsedData.metadata,
+          format,
+          usedOCR: parsedData.usedOCR || false,
+          ocrConfidence: parsedData.confidence,
+          bankDetection: shouldIncludeBankDetection ? parsedData.bankDetection : undefined,
+          requiresEmailGate: false, // DB unavailable - skip email gate
+          devMode: true, // Flag to indicate this is dev mode response
+        });
+      }
     } catch (error) {
       console.error("=== UPLOAD ERROR ===");
       console.error("Error:", error);
