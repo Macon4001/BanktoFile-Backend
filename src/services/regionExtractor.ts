@@ -706,12 +706,13 @@ export class RegionExtractor {
       console.log(`[Transaction Mapping] amountIn: "${cellValues.amountIn}" -> ${amountIn}, amountOut: "${cellValues.amountOut}" -> ${amountOut}`);
 
       // Determine type based on which column has a value
+      // Note: amountOut may be negative (e.g., -112.23) so we check !== 0 instead of > 0
       if (amountIn > 0 && amountOut === 0) {
         amount = amountIn;
         normalizedType = 'credit';
         console.log(`[Transaction Type] Money IN detected -> credit, amount: ${amount}`);
-      } else if (amountOut > 0 && amountIn === 0) {
-        amount = amountOut;
+      } else if (amountOut !== 0 && amountIn === 0) {
+        amount = Math.abs(amountOut); // Use absolute value since amountOut may be negative
         normalizedType = 'debit';
         console.log(`[Transaction Type] Money OUT detected -> debit, amount: ${amount}`);
       } else if (amountIn > 0) {
@@ -719,6 +720,11 @@ export class RegionExtractor {
         amount = amountIn;
         normalizedType = 'credit';
         console.log(`[Transaction Type] Both have values, using amountIn -> credit, amount: ${amount}`);
+      } else if (amountOut !== 0) {
+        // Only amountOut has a value (fallback case)
+        amount = Math.abs(amountOut);
+        normalizedType = 'debit';
+        console.log(`[Transaction Type] Only amountOut present (fallback) -> debit, amount: ${amount}`);
       }
     }
 

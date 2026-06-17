@@ -55,6 +55,10 @@ export class PDFParser {
     this.mettleNatwestParser = new MettleNatwestCoordinateParser();
   }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean; bankDetection?: BankDetectionResult }> {
+    // Reset Capital One state at the start of each parse
+    this.capitalOneSections = undefined;
+    this.isCapitalOne = false;
+
     let text = "";
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let data: any;
