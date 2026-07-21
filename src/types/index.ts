@@ -9,6 +9,7 @@ export interface Transaction {
   isOpeningBalance?: boolean; // Mark opening balance / balance brought forward
   amountIn?: number; // For manual extraction with separate in/out columns
   amountOut?: number; // For manual extraction with separate in/out columns
+  isTotal?: boolean; // Marks a summary/totals row (renders both Money In and Money Out)
 }
 
 export interface CapitalOneSection {

@@ -3,6 +3,8 @@ import { Transaction } from "../types/index.js";
 export interface CapitalOneSection {
   title: string;
   transactions: Transaction[];
+  total?: number; // Optional section total (used by Chase's "Total ..." rows)
+  totalLabel?: string; // Label for the total row (e.g. "Total Deposits and Additions")
 }
 
 export interface CapitalOneParsedData {

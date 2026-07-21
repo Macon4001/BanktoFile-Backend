@@ -7,6 +7,10 @@ import { WiseCoordinateParser } from "./wiseCoordinateParser.js";
 import { CoopBankCoordinateParser } from "./coopBankCoordinateParser.js";
 import { LloydsBusinessParser } from "./lloydsBusinessParser.js";
 import { CapitalOneParser } from "./capitalOneParser.js";
+import { ChaseCoordinateParser } from "./chaseCoordinateParser.js";
+import { BankOfAmericaCoordinateParser } from "./bankOfAmericaCoordinateParser.js";
+import { WellsFargoCoordinateParser } from "./wellsFargoCoordinateParser.js";
+import { CitibankCoordinateParser } from "./citibankCoordinateParser.js";
 import { MettleNatwestCoordinateParser } from "./mettleNatwestCoordinateParser.js";
 import { bankDetectionService, BankDetectionResult } from "./bankDetectionService.js";
 import { checkParsingAccuracy, logSanityCheckResult } from "../utils/parsingAccuracyCheck.js";
@@ -38,9 +42,15 @@ export class PDFParser {
   private coopBankParser: CoopBankCoordinateParser;
   private lloydsBusinessParser: LloydsBusinessParser;
   private capitalOneParser: CapitalOneParser;
+  private chaseParser: ChaseCoordinateParser;
+  private bankOfAmericaParser: BankOfAmericaCoordinateParser;
+  private wellsFargoParser: WellsFargoCoordinateParser;
+  private citibankParser: CitibankCoordinateParser;
   private mettleNatwestParser: MettleNatwestCoordinateParser;
 
-  // Temporary storage for Capital One sections during parsing
+  // Temporary storage for sectioned statements (Capital One, Chase) during parsing.
+  // The `capitalOneSections`/`isCapitalOne` names are kept for compatibility with the
+  // existing sectioned-CSV output pathway, which is bank-agnostic.
   private capitalOneSections?: CapitalOneSection[];
   private isCapitalOne: boolean = false;
 
@@ -52,6 +62,10 @@ export class PDFParser {
     this.coopBankParser = new CoopBankCoordinateParser();
     this.lloydsBusinessParser = new LloydsBusinessParser();
     this.capitalOneParser = new CapitalOneParser();
+    this.chaseParser = new ChaseCoordinateParser();
+    this.bankOfAmericaParser = new BankOfAmericaCoordinateParser();
+    this.wellsFargoParser = new WellsFargoCoordinateParser();
+    this.citibankParser = new CitibankCoordinateParser();
     this.mettleNatwestParser = new MettleNatwestCoordinateParser();
   }
   async parsePDF(buffer: Buffer): Promise<ParsedStatement & { rawText: string; needsOCR?: boolean; bankDetection?: BankDetectionResult }> {
@@ -219,6 +233,76 @@ export class PDFParser {
           rawText: text,
           bankDetection,
         };
+      }
+
+      // Check if this is a Chase (JPMorgan Chase) statement - use coordinate-based parser.
+      // Chase's PDF text layer is emitted out of visual order, so rows must be rebuilt
+      // from coordinates. Results are grouped into sections (Deposits, Withdrawals, ...).
+      if (this.chaseParser.isChaseStatement(text)) {
+        console.log("Detected Chase statement - using coordinate-based parser");
+        const chaseResult = await this.chaseParser.parseChaseStatement(buffer, text);
+        if (chaseResult.allTransactions.length > 0) {
+          this.capitalOneSections = chaseResult.sections;
+          this.isCapitalOne = true; // Reuses the bank-agnostic sectioned-CSV pathway
+          return {
+            transactions: chaseResult.allTransactions,
+            metadata: this.extractMetadata(text),
+            rawText: text,
+            bankDetection,
+            capitalOneSections: this.capitalOneSections,
+            isCapitalOne: this.isCapitalOne,
+          };
+        }
+        console.log("⚠️  Chase parser found no transactions - falling back to generic parsing");
+      }
+
+      // Check if this is a Bank of America statement - use coordinate-based parser.
+      // BoA uses a single Credit/Debit-columned table that must be rebuilt from coordinates.
+      if (this.bankOfAmericaParser.isBankOfAmericaStatement(text)) {
+        console.log("Detected Bank of America statement - using coordinate-based parser");
+        const boaTransactions = await this.bankOfAmericaParser.parseBankOfAmericaStatement(buffer, text);
+        if (boaTransactions.length > 0) {
+          return {
+            transactions: boaTransactions,
+            metadata: this.extractMetadata(text),
+            rawText: text,
+            bankDetection,
+          };
+        }
+        console.log("⚠️  Bank of America parser found no transactions - falling back to generic parsing");
+      }
+
+      // Check if this is a Wells Fargo statement - use coordinate-based parser.
+      // WF uses a six-column Transaction history table (Date, Check, Description,
+      // Deposits/Credits, Withdrawals/Debits, Ending daily balance) rebuilt from coordinates.
+      if (this.wellsFargoParser.isWellsFargoStatement(text)) {
+        console.log("Detected Wells Fargo statement - using coordinate-based parser");
+        const wfTransactions = await this.wellsFargoParser.parseWellsFargoStatement(buffer, text);
+        if (wfTransactions.length > 0) {
+          return {
+            transactions: wfTransactions,
+            metadata: this.extractMetadata(text),
+            rawText: text,
+            bankDetection,
+          };
+        }
+        console.log("⚠️  Wells Fargo parser found no transactions - falling back to generic parsing");
+      }
+
+      // Check if this is a Citibank statement - use coordinate-based parser.
+      // Citi uses a Date | Description | Amount Subtracted | Amount Added | Balance table.
+      if (this.citibankParser.isCitibankStatement(text)) {
+        console.log("Detected Citibank statement - using coordinate-based parser");
+        const citiTransactions = await this.citibankParser.parseCitibankStatement(buffer, text);
+        if (citiTransactions.length > 0) {
+          return {
+            transactions: citiTransactions,
+            metadata: this.extractMetadata(text),
+            rawText: text,
+            bankDetection,
+          };
+        }
+        console.log("⚠️  Citibank parser found no transactions - falling back to generic parsing");
       }
 
       // Extract transactions from the PDF text (for other banks)

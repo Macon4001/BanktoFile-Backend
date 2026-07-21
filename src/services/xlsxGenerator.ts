@@ -11,6 +11,30 @@ export class XLSXGenerator {
     const worksheetData = [
       ["Date", "Description", "Type", "Money In", "Money Out", "Balance"], // Header row
       ...transactions.map((transaction) => {
+        // Summary/totals row: show both Money In and Money Out from amountIn/amountOut.
+        if (transaction.isTotal) {
+          return [
+            transaction.date || "",
+            transaction.description,
+            "",
+            transaction.amountIn !== undefined ? transaction.amountIn.toFixed(2) : "",
+            transaction.amountOut !== undefined ? transaction.amountOut.toFixed(2) : "",
+            "",
+          ];
+        }
+
+        // Opening balance row: no money movement, just the starting balance.
+        if (transaction.isOpeningBalance) {
+          return [
+            transaction.date || "",
+            transaction.description,
+            "",
+            "",
+            "",
+            transaction.balance !== undefined ? transaction.balance.toFixed(2) : "",
+          ];
+        }
+
         const isCredit = transaction.type?.toLowerCase() === 'credit';
         const isDebit = transaction.type?.toLowerCase() === 'debit';
 

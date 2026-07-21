@@ -20,6 +20,31 @@ export class CSVGenerator {
     // Convert transactions to rows
     const records = transactions.map((transaction, idx) => {
       console.log(`[CSV Record ${idx}] Creating row with type: "${transaction.type}"`);
+
+      // Summary/totals row: show both Money In and Money Out from amountIn/amountOut.
+      if (transaction.isTotal) {
+        return {
+          Date: transaction.date || "",
+          Description: transaction.description,
+          Type: "",
+          "Money In": transaction.amountIn !== undefined ? transaction.amountIn.toFixed(2) : "",
+          "Money Out": transaction.amountOut !== undefined ? transaction.amountOut.toFixed(2) : "",
+          Balance: "",
+        };
+      }
+
+      // Opening balance row: no money movement, just the starting balance.
+      if (transaction.isOpeningBalance) {
+        return {
+          Date: transaction.date || "",
+          Description: transaction.description,
+          Type: "",
+          "Money In": "",
+          "Money Out": "",
+          Balance: transaction.balance !== undefined ? transaction.balance.toFixed(2) : "",
+        };
+      }
+
       const isCredit = transaction.type?.toLowerCase() === 'credit';
       const isDebit = transaction.type?.toLowerCase() === 'debit';
 
@@ -79,6 +104,15 @@ export class CSVGenerator {
             Amount: t.amount.toFixed(2)
           };
         });
+
+        // Append the section total row if present
+        if (section.total !== undefined) {
+          records.push({
+            Date: '',
+            "Check No": section.totalLabel || `Total ${section.title}`,
+            Amount: section.total.toFixed(2)
+          });
+        }
       } else {
         // Deposits, Withdrawals, Debit/ATM: Date, Description, Amount
         columns = ["Date", "Description", "Amount"];
@@ -87,6 +121,15 @@ export class CSVGenerator {
           Description: t.description,
           Amount: t.amount.toFixed(2)
         }));
+
+        // Append the section total row if present
+        if (section.total !== undefined) {
+          records.push({
+            Date: '',
+            Description: section.totalLabel || `Total ${section.title}`,
+            Amount: section.total.toFixed(2)
+          });
+        }
       }
 
       // Generate CSV for this section
