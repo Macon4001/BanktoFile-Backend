@@ -3,10 +3,12 @@ import { PDFCoordinateExtractor, TextElement } from "./pdfCoordinateExtractor.js
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const DATE_REGEX = /^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$/i;
-// Column amounts: "1,234.56", overdrawn balances may carry a trailing "-" or "OD"
-const AMOUNT_REGEX = /^£?(\d{1,3}(?:,\d{3})*\.\d{2})\s*(-|OD)?$/i;
+// Column amounts: "1,234.56", overdrawn balances may carry a trailing "-" or "OD".
+// Also accepts a mistyped decimal comma ("21,18") - a thousands group always has 3 digits.
+const AMOUNT_REGEX = /^£?(\d{1,3}(?:,\d{3})*\.\d{2}|\d{1,3},\d{2})\s*(-|OD)?$/i;
 
 interface BarclaysColumns {
+  dateRight: number;
   descriptionLeft: number;
   moneyOutRight: number;
   moneyInRight: number;
@@ -75,50 +77,52 @@ export class BarclaysCoordinateParser {
         r.elements.some(e => /^(End balance|Continued|Anything Wrong\?)/i.test(e.text) || /^Barclays Bank/i.test(e.text)));
       const tableEndY = endRow ? endRow.y : Infinity;
 
-      const tableElements = pageElements
-        .filter(e => e.y > headerRow.y + 2 && e.y < tableEndY - 2)
-        .sort((a, b) => a.y - b.y || a.x - b.x);
-
-      // Skip the "Start balance" row (and anything on its line)
-      const startBalanceYs = tableElements.filter(e => /^Start balance$/i.test(e.text)).map(e => e.y);
-      const isOnStartBalanceRow = (e: TextElement) => startBalanceYs.some(y => Math.abs(e.y - y) <= 4);
+      const tableElements = pageElements.filter(e => e.y > headerRow.y + 2 && e.y < tableEndY - 2);
+      // Some PDFs split text into touching fragments ("22" "," "267.05", "0" "9" "Dec"),
+      // so stitch each row back together before classifying anything
+      const tableRows = this.extractor.groupIntoRows(tableElements, 2)
+        .map(r => ({ y: r.y, elements: this.mergeFragments(r.elements) }));
 
       const dates: { y: number; date: string }[] = [];
       const descriptions: { y: number; text: string }[] = [];
       const balances: { y: number; value: number }[] = [];
       const pageAnchors: Anchor[] = [];
 
-      for (const el of tableElements) {
-        if (isOnStartBalanceRow(el)) continue;
+      for (const row of tableRows) {
+        // Skip the "Start balance" row (and anything on its line)
+        if (row.elements.some(e => /^Start balance$/i.test(e.text))) continue;
 
-        const dateMatch = el.text.match(DATE_REGEX);
-        if (dateMatch && el.x < columns.descriptionLeft) {
-          dates.push({ y: el.y, date: this.formatDate(dateMatch[1], dateMatch[2], endYear, endMonthIdx) });
-          continue;
+        // Date cell: everything left of the Description header, e.g. "09" + "Dec"
+        const dateText = row.elements.filter(e => e.x < columns.dateRight).map(e => e.text).join(" ");
+        const dateMatch = dateText.match(DATE_REGEX);
+        if (dateMatch) {
+          dates.push({ y: row.y, date: this.formatDate(dateMatch[1], dateMatch[2], endYear, endMonthIdx) });
         }
 
-        const amountMatch = el.text.match(AMOUNT_REGEX);
-        if (amountMatch && el.x >= columns.amountsLeft) {
-          const value = parseFloat(amountMatch[1].replace(/,/g, ""));
-          const right = el.x + el.width;
-          const column = this.nearestColumn(right, columns);
-          if (column === "balance") {
-            balances.push({ y: el.y, value: amountMatch[2] ? -value : value });
-          } else {
-            pageAnchors.push({
-              y: el.y,
-              date: "",
-              amount: value,
-              type: column === "in" ? "credit" : "debit",
-              descriptionLines: [],
-            });
+        for (const el of row.elements) {
+          if (el.x < columns.dateRight) continue;
+
+          const value = el.x >= columns.amountsLeft ? this.parseAmount(el.text) : null;
+          if (value !== null) {
+            const column = this.nearestColumn(el.x + el.width, columns);
+            if (column === "balance") {
+              balances.push({ y: el.y, value });
+            } else {
+              pageAnchors.push({
+                y: el.y,
+                date: "",
+                amount: Math.abs(value),
+                type: column === "in" ? "credit" : "debit",
+                descriptionLines: [],
+              });
+            }
+            continue;
           }
-          continue;
-        }
 
-        // Description column text (ignores transaction-type icons like "STO"/"Giro" left of it)
-        if (el.x >= columns.descriptionLeft && el.x < columns.amountsLeft) {
-          descriptions.push({ y: el.y, text: el.text });
+          // Description column text (ignores transaction-type icons like "STO"/"Giro" left of it)
+          if (el.x >= columns.descriptionLeft && el.x < columns.amountsLeft) {
+            descriptions.push({ y: el.y, text: el.text });
+          }
         }
       }
 
@@ -205,6 +209,7 @@ export class BarclaysCoordinateParser {
     const balance = find(/^Balance$/i);
 
     return {
+      dateRight: description ? description.x : 90,
       // Description text is indented past the header (icons like "STO" sit in between)
       descriptionLeft: description ? description.x + 10 : 100,
       moneyOutRight: moneyOut.x + moneyOut.width,
@@ -213,6 +218,30 @@ export class BarclaysCoordinateParser {
       // Wide amounts ("5,000.00") start a little left of the "Money out" header
       amountsLeft: moneyOut.x - 15,
     };
+  }
+
+  /** Signed amount from a column cell, or null if the text isn't an amount */
+  private parseAmount(text: string): number | null {
+    const match = text.match(AMOUNT_REGEX);
+    if (!match) return null;
+    const raw = /^\d{1,3},\d{2}$/.test(match[1]) ? match[1].replace(",", ".") : match[1].replace(/,/g, "");
+    const value = parseFloat(raw);
+    return match[2] ? -value : value;
+  }
+
+  /** Join fragments on the same row that touch horizontally (no visible gap between them) */
+  private mergeFragments(elements: TextElement[]): TextElement[] {
+    const merged: TextElement[] = [];
+    for (const el of [...elements].sort((a, b) => a.x - b.x)) {
+      const prev = merged[merged.length - 1];
+      const prevRight = prev ? prev.x + prev.width : -Infinity;
+      if (prev && el.x - prevRight <= 1 && el.x - prevRight >= -1) {
+        merged[merged.length - 1] = { ...prev, text: prev.text + el.text, width: el.x + el.width - prev.x };
+      } else {
+        merged.push({ ...el });
+      }
+    }
+    return merged;
   }
 
   private nearestColumn(right: number, columns: BarclaysColumns): "out" | "in" | "balance" {
