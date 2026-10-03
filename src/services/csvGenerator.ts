@@ -38,7 +38,7 @@ export class CSVGenerator {
         return {
           Date: transaction.date || "",
           Description: transaction.description,
-          Type: "",
+          Type: transaction.type || "balance",
           "Money In": "",
           "Money Out": "",
           Balance: transaction.balance !== undefined ? transaction.balance.toFixed(2) : "",

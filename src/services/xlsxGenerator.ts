@@ -28,7 +28,7 @@ export class XLSXGenerator {
           return [
             transaction.date || "",
             transaction.description,
-            "",
+            transaction.type || "balance",
             "",
             "",
             transaction.balance !== undefined ? transaction.balance.toFixed(2) : "",

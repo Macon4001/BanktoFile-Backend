@@ -52,7 +52,8 @@ export class BarclaysCoordinateParser {
     console.log(`Extracted ${elements.length} text elements from PDF`);
 
     const { endYear, endMonthIdx } = this.detectStatementPeriod(parsedText);
-    const startBalance = this.extractSummaryAmount(parsedText, /Start balance\s*£?\s*([\d,]+\.\d{2})/i);
+    // Opening balance: from the table's "Start balance" row, falling back to "At a glance"
+    let openingBalance: { date: string; balance?: number } | undefined;
 
     const pageNumbers = Array.from(new Set(elements.map(e => e.pageNumber))).sort((a, b) => a - b);
     const anchors: Anchor[] = [];
@@ -89,8 +90,18 @@ export class BarclaysCoordinateParser {
       const pageAnchors: Anchor[] = [];
 
       for (const row of tableRows) {
-        // Skip the "Start balance" row (and anything on its line)
-        if (row.elements.some(e => /^Start balance$/i.test(e.text))) continue;
+        // "Start balance" row becomes the opening balance, not a transaction
+        if (row.elements.some(e => /^Start balance$/i.test(e.text))) {
+          if (!openingBalance) {
+            const dateMatch = row.elements.filter(e => e.x < columns.dateRight).map(e => e.text).join(" ").match(DATE_REGEX);
+            const balanceEl = row.elements.find(e => e.x >= columns.amountsLeft && this.parseAmount(e.text) !== null);
+            openingBalance = {
+              date: dateMatch ? this.formatDate(dateMatch[1], dateMatch[2], endYear, endMonthIdx) : "",
+              balance: balanceEl ? this.parseAmount(balanceEl.text)! : undefined,
+            };
+          }
+          continue;
+        }
 
         // Date cell: everything left of the Description header, e.g. "09" + "Dec"
         const dateText = row.elements.filter(e => e.x < columns.dateRight).map(e => e.text).join(" ");
@@ -153,7 +164,20 @@ export class BarclaysCoordinateParser {
 
     // Build transactions, filling in balances Barclays doesn't print (it only shows end-of-day)
     const transactions: Transaction[] = [];
+    const startBalance = openingBalance?.balance ??
+      this.extractSummaryAmount(parsedText, /Start balance\s*£\s*([\d,]+\.\d{2})/i);
     let running = startBalance;
+
+    if (startBalance !== undefined) {
+      transactions.push({
+        date: openingBalance?.date || anchors[0]?.date || "",
+        description: "Start balance",
+        amount: 0,
+        balance: startBalance,
+        type: "balance",
+        isOpeningBalance: true,
+      });
+    }
 
     for (const anchor of anchors) {
       const description = anchor.descriptionLines
@@ -209,7 +233,8 @@ export class BarclaysCoordinateParser {
     const balance = find(/^Balance$/i);
 
     return {
-      dateRight: description ? description.x : 90,
+      // Small margin: unindented text (e.g. "Start balance") can sit exactly at the header's x
+      dateRight: description ? description.x - 2 : 88,
       // Description text is indented past the header (icons like "STO" sit in between)
       descriptionLeft: description ? description.x + 10 : 100,
       moneyOutRight: moneyOut.x + moneyOut.width,
@@ -229,10 +254,18 @@ export class BarclaysCoordinateParser {
     return match[2] ? -value : value;
   }
 
-  /** Join fragments on the same row that touch horizontally (no visible gap between them) */
+  /**
+   * Join fragments on the same row that touch horizontally (no visible gap between them).
+   * Fragments starting inside the previous one are dropped - bold text is sometimes drawn
+   * as overlapping copies of the same glyphs ("N" "N" "No" "o" "ov" ...).
+   */
   private mergeFragments(elements: TextElement[]): TextElement[] {
     const merged: TextElement[] = [];
+    let lastRight = -Infinity; // Right edge of the last fragment kept
     for (const el of [...elements].sort((a, b) => a.x - b.x)) {
+      if (el.x < lastRight - 1) continue;
+      lastRight = el.x + el.width;
+
       const prev = merged[merged.length - 1];
       const prevRight = prev ? prev.x + prev.width : -Infinity;
       if (prev && el.x - prevRight <= 1 && el.x - prevRight >= -1) {
@@ -277,16 +310,23 @@ export class BarclaysCoordinateParser {
     return `${day.padStart(2, "0")} ${monthName} ${year}`;
   }
 
+  /** "At a glance" figure; some statements print the amount before its label ("£430.00Money in") */
+  private extractGlanceAmount(text: string, label: string): number | undefined {
+    return this.extractSummaryAmount(text, new RegExp(`${label}\\s*£\\s*([\\d,]+\\.\\d{2})`, "i")) ??
+      this.extractSummaryAmount(text, new RegExp(`£([\\d,]+\\.\\d{2})\\s*${label}`, "i"));
+  }
+
   private extractSummaryAmount(text: string, regex: RegExp): number | undefined {
     const match = text.match(regex);
     return match ? parseFloat(match[1].replace(/,/g, "")) : undefined;
   }
 
-  private logTotals(transactions: Transaction[], text: string): void {
+  private logTotals(allTransactions: Transaction[], text: string): void {
+    const transactions = allTransactions.filter(t => !t.isOpeningBalance);
     const moneyIn = transactions.filter(t => t.type === "credit").reduce((s, t) => s + t.amount, 0);
     const moneyOut = transactions.filter(t => t.type === "debit").reduce((s, t) => s + t.amount, 0);
-    const expectedIn = this.extractSummaryAmount(text, /Money in\s*£\s*([\d,]+\.\d{2})/i);
-    const expectedOut = this.extractSummaryAmount(text, /Money out\s*£\s*([\d,]+\.\d{2})/i);
+    const expectedIn = this.extractGlanceAmount(text, "Money in");
+    const expectedOut = this.extractGlanceAmount(text, "Money out");
     console.log(`[Barclays] Money in £${moneyIn.toFixed(2)} (statement says £${expectedIn?.toFixed(2) ?? "?"}), ` +
                 `Money out £${moneyOut.toFixed(2)} (statement says £${expectedOut?.toFixed(2) ?? "?"})`);
   }
