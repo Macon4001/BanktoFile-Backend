@@ -5,6 +5,7 @@ import { GenericCoordinateParser } from "./genericCoordinateParser.js";
 import { HSBCCoordinateParser } from "./hsbcCoordinateParser.js";
 import { WiseCoordinateParser } from "./wiseCoordinateParser.js";
 import { CoopBankCoordinateParser } from "./coopBankCoordinateParser.js";
+import { BarclaysCoordinateParser } from "./barclaysCoordinateParser.js";
 import { LloydsBusinessParser } from "./lloydsBusinessParser.js";
 import { CapitalOneParser } from "./capitalOneParser.js";
 import { ChaseCoordinateParser } from "./chaseCoordinateParser.js";
@@ -40,6 +41,7 @@ export class PDFParser {
   private hsbcParser: HSBCCoordinateParser;
   private wiseParser: WiseCoordinateParser;
   private coopBankParser: CoopBankCoordinateParser;
+  private barclaysParser: BarclaysCoordinateParser;
   private lloydsBusinessParser: LloydsBusinessParser;
   private capitalOneParser: CapitalOneParser;
   private chaseParser: ChaseCoordinateParser;
@@ -60,6 +62,7 @@ export class PDFParser {
     this.hsbcParser = new HSBCCoordinateParser();
     this.wiseParser = new WiseCoordinateParser();
     this.coopBankParser = new CoopBankCoordinateParser();
+    this.barclaysParser = new BarclaysCoordinateParser();
     this.lloydsBusinessParser = new LloydsBusinessParser();
     this.capitalOneParser = new CapitalOneParser();
     this.chaseParser = new ChaseCoordinateParser();
@@ -140,9 +143,30 @@ export class PDFParser {
         };
       }
 
+      // Barclays statements can mention other banks in transaction descriptions
+      // (e.g. "Direct Debit to NatWest...", "Payment to HSBC"), so identify them up front
+      // and keep them out of the keyword-based bank checks below.
+      const isBarclays = this.isBarclaysStatement(text);
+
+      // Barclays - use coordinate-based parser so amounts land in the right
+      // Money out / Money in column. Falls back to the text parser if it finds nothing.
+      if (isBarclays) {
+        console.log("Detected Barclays statement - using coordinate-based parser");
+        const transactions = await this.extractBarclaysTransactionsCoordinate(buffer, text);
+        if (transactions.length > 0) {
+          return {
+            transactions,
+            metadata: this.extractMetadata(text),
+            rawText: text,
+            bankDetection,
+          };
+        }
+        console.log("⚠️  Barclays coordinate parser found no transactions - falling back to text parser");
+      }
+
       // Check if this is a Wise statement - use coordinate-based parser
       // Wise statements have multi-line transactions and 3-column layout
-      if (text.includes("TransferWise") || text.includes("Wise ID:") || text.includes("wise.com")) {
+      if (!isBarclays && (text.includes("TransferWise") || text.includes("Wise ID:") || text.includes("wise.com"))) {
         console.log("Detected Wise statement - using coordinate-based parser");
         const transactions = await this.extractWiseTransactionsCoordinate(buffer, text);
         console.log(`[Wise Parser] Extracted ${transactions.length} transactions`);
@@ -181,7 +205,7 @@ export class PDFParser {
 
       // Check if this is a Metro Bank statement - use coordinate-based parser
       // Metro Bank PDFs have chaotic text ordering that breaks text-based parsing
-      if (text.includes("Metro Bank") || text.includes("MYMBGB2L") || (text.includes("MYMB") && text.includes("Cash Account Statement"))) {
+      if (!isBarclays && (text.includes("Metro Bank") || text.includes("MYMBGB2L") || (text.includes("MYMB") && text.includes("Cash Account Statement")))) {
         console.log("Detected Metro Bank statement - using coordinate-based parser");
         const transactions = await this.extractMetroBankTransactionsCoordinate(buffer, text);
         return {
@@ -194,7 +218,7 @@ export class PDFParser {
 
       // Check if this is an HSBC statement - use coordinate-based parser
       // HSBC PDFs also have chaotic text ordering similar to Metro Bank
-      if (text.includes("HSBC") || text.includes("HBUKGB") || text.includes("www.hsbc.co.uk")) {
+      if (!isBarclays && (text.includes("HSBC") || text.includes("HBUKGB") || text.includes("www.hsbc.co.uk"))) {
         console.log("Detected HSBC statement - using coordinate-based parser");
         const transactions = await this.extractHSBCTransactionsCoordinate(buffer, text);
         return {
@@ -210,7 +234,7 @@ export class PDFParser {
       // They contain "Mettle" and/or "www.mettle.co.uk" in the footer.
       // This check MUST come before the generic NatWest check because Mettle statements
       // also contain "National Westminster Bank" in their footer text.
-      if (text.includes("Mettle") || text.includes("www.mettle.co.uk") || text.includes("mettle.co.uk")) {
+      if (!isBarclays && (text.includes("Mettle") || text.includes("www.mettle.co.uk") || text.includes("mettle.co.uk"))) {
         console.log("Detected Mettle (NatWest) statement - using coordinate-based parser");
         const transactions = await this.extractMettleNatwestTransactionsCoordinate(buffer, text);
         return {
@@ -223,8 +247,8 @@ export class PDFParser {
 
       // Check if this is a Co-op Bank statement - use coordinate-based parser
       // Co-op Bank PDFs have specific column layout: Date, Description, Withdrawals, Deposits, Balance
-      if (text.includes("Co-operative Bank") || text.includes("CPBKGB22") || text.includes("BUS DIRPLUS") ||
-          (text.includes("CPBK") && text.includes("IBAN"))) {
+      if (!isBarclays && (text.includes("Co-operative Bank") || text.includes("CPBKGB22") || text.includes("BUS DIRPLUS") ||
+          (text.includes("CPBK") && text.includes("IBAN")))) {
         console.log("Detected Co-op Bank statement - using coordinate-based parser");
         const transactions = await this.extractCoopBankTransactionsCoordinate(buffer, text);
         return {
@@ -459,6 +483,13 @@ export class PDFParser {
     if (lloydsBusinessTransactions.length > 0) {
       console.log(`✅ Detected Lloyds Business Account - extracted ${lloydsBusinessTransactions.length} transactions`);
       return lloydsBusinessTransactions;
+    }
+
+    // Check Barclays by its own identifiers before the other UK banks, whose keyword
+    // checks can match payee names in Barclays transactions (e.g. "Direct Debit to NatWest")
+    if (this.isBarclaysStatement(text)) {
+      console.log("Detected Barclays bank statement");
+      return this.extractBarclaysTransactions(text);
     }
 
     // Check if this is an RBS (Royal Bank of Scotland) statement
@@ -2769,6 +2800,14 @@ export class PDFParser {
     return transactions;
   }
 
+  // Barclays' own identifiers (BIC and legal entity names). Case-sensitive so that
+  // uppercase payee text like "BARCLAYS BANK PLC" in other banks' statements doesn't match.
+  private isBarclaysStatement(text: string): boolean {
+    return text.includes("BUKBGB22") ||
+           text.includes("Barclays Bank PLC") ||
+           text.includes("Barclays Bank UK PLC");
+  }
+
   // Extract transactions from Barclays bank statements
   // NEW APPROACH: Handle multiple transactions per date properly
   // Format: Each date block contains N transactions, each with description + amounts
@@ -2787,9 +2826,10 @@ export class PDFParser {
     }
 
     // Helper: Extract amounts from text
+    // Column amounts are never £-prefixed, so ignore inline ones like "1 Item(s) at £10.50"
     const extractAmounts = (text: string): number[] => {
       const regex = /\d{1,3}(?:,\d{3})*\.\d{2}/g;
-      const matches = text.match(regex);
+      const matches = text.replace(/£\d{1,3}(?:,\d{3})*\.\d{2}/g, '').match(regex);
       if (!matches) return [];
       return matches.map(m => parseFloat(m.replace(/,/g, '')));
     };
@@ -2992,7 +3032,7 @@ export class PDFParser {
 
           if (amounts.length === 1) {
             amount = amounts[0];
-            balance = amounts[0];
+            balance = 0; // No balance printed on this row - filled in by reconcileBarclaysBalances
             type = isCredit ? 'credit' : 'debit';
           } else if (amounts.length === 2) {
             // Two amounts in Barclays format could be:
@@ -3085,6 +3125,28 @@ export class PDFParser {
         currentDate = `${day} ${month} ${statementYear}`;
         i++;
       } else {
+        // Undated row with description and amounts on the same line,
+        // e.g. "Feature Store Multiple Discount2.003,868.18"
+        const inlineAmounts = line.includes('£') ? [] : extractAmounts(line);
+        const inlineAmountMatch = line.match(/\d{1,3}(?:,\d{3})*\.\d{2}/);
+        const inlineDesc = inlineAmountMatch ? line.substring(0, line.indexOf(inlineAmountMatch[0])).trim() : '';
+        if (currentDate && inlineAmounts.length > 0 && inlineAmounts.length <= 2 &&
+            /^[A-Z]/.test(line) && /\d\.\d{2}$/.test(line) &&
+            inlineDesc.length > 10 && /[A-Za-z]{3,}/.test(inlineDesc) &&
+            !/^(Money (in|out)|Balance|Description|Timed at)/i.test(inlineDesc)) {
+          const lower = inlineDesc.toLowerCase();
+          const isCredit = /received|transfer from|refund|discount|account credit/.test(lower);
+          transactions.push({
+            date: currentDate,
+            description: inlineDesc,
+            amount: inlineAmounts[0],
+            balance: inlineAmounts.length === 2 ? inlineAmounts[1] : 0,
+            type: isCredit ? 'credit' : 'debit',
+          });
+          i++;
+          continue;
+        }
+
         // Not a date line - check if it's a description line (starts transaction without date)
         // This handles cases where description appears on its own line after a standalone date
         if (currentDate && line.length > 5 && !extractAmounts(line).length) {
@@ -3266,7 +3328,7 @@ export class PDFParser {
 
             if (amounts.length === 1) {
               amount = amounts[0];
-              balance = amounts[0];
+              balance = 0; // No balance printed on this row - filled in by reconcileBarclaysBalances
               type = isCredit ? 'credit' : 'debit';
             } else if (amounts.length === 2) {
               // Two amounts could be:
@@ -3339,8 +3401,74 @@ export class PDFParser {
       }
     }
 
+    const startBalanceMatch = text.match(/Start balance\s*£?(\d{1,3}(?:,\d{3})*\.\d{2})/i);
+    if (startBalanceMatch) {
+      this.reconcileBarclaysBalances(transactions, parseFloat(startBalanceMatch[1].replace(/,/g, '')));
+    }
+
     console.log(`Extracted ${transactions.length} Barclays transactions`);
     return transactions;
+  }
+
+  // Barclays only prints a balance on the last row of each date, and keyword-based
+  // credit detection misses entries like "Account Credit: Deposit", "Receipt:" or discounts.
+  // Walk the running balance: for each group of rows ending in a printed balance, pick the
+  // debit/credit signs that make the group sum to the balance change (preferring the keyword
+  // guess when several fit), then fill in the intermediate balances.
+  private reconcileBarclaysBalances(transactions: Transaction[], startBalance: number): void {
+    const MAX_GROUP = 14; // 2^14 sign combinations - plenty for one date's transactions
+    const TOLERANCE_PENCE = 100; // Accept a near-fit when the statement's own figures are off by pennies
+    let prevBalance = startBalance;
+    let groupStart = 0;
+
+    for (let end = 0; end < transactions.length; end++) {
+      const endBalance = transactions[end].balance;
+      if (!endBalance) continue;
+
+      const group = transactions.slice(groupStart, end + 1);
+      const deltaPence = Math.round((endBalance - prevBalance) * 100);
+      const amountsPence = group.map(t => Math.round(t.amount * 100));
+
+      let bestMask = -1;
+      let bestDiff = Infinity;
+      let bestChanges = Infinity;
+      if (group.length <= MAX_GROUP) {
+        for (let mask = 0; mask < (1 << group.length); mask++) {
+          // bit set = credit
+          let sum = 0;
+          let changes = 0;
+          for (let k = 0; k < group.length; k++) {
+            const isCredit = (mask >> k) & 1;
+            sum += isCredit ? amountsPence[k] : -amountsPence[k];
+            if ((isCredit === 1) !== (group[k].type === 'credit')) changes++;
+          }
+          const diff = Math.abs(sum - deltaPence);
+          if (diff < bestDiff || (diff === bestDiff && changes < bestChanges)) {
+            bestMask = mask;
+            bestDiff = diff;
+            bestChanges = changes;
+          }
+        }
+      }
+
+      if (bestMask >= 0 && bestDiff <= TOLERANCE_PENCE) {
+        let running = prevBalance;
+        group.forEach((t, k) => {
+          t.type = (bestMask >> k) & 1 ? 'credit' : 'debit';
+          running += t.type === 'credit' ? t.amount : -t.amount;
+          // Keep the printed balance on the last row; only fill in the missing ones
+          if (k < group.length - 1) t.balance = Math.round(running * 100) / 100;
+        });
+        if (bestDiff > 0) {
+          console.log(`⚠️  Barclays balances off by £${(bestDiff / 100).toFixed(2)} for rows ${groupStart}-${end} - statement figures don't add up`);
+        }
+      } else {
+        console.log(`⚠️  Barclays balance reconciliation failed for rows ${groupStart}-${end} (${prevBalance} → ${endBalance})`);
+      }
+
+      prevBalance = endBalance;
+      groupStart = end + 1;
+    }
   }
 
   // Extract transactions from Metro Bank statements
@@ -4053,6 +4181,15 @@ export class PDFParser {
    * This method uses X,Y coordinates to handle the specific column layout:
    * Date, Description, Withdrawals, Deposits, Balance
    */
+  private async extractBarclaysTransactionsCoordinate(buffer: Buffer, parsedText: string): Promise<Transaction[]> {
+    try {
+      return await this.barclaysParser.parseBarclaysStatement(buffer, parsedText);
+    } catch (error) {
+      console.error('⚠️  Coordinate-based Barclays parser failed:', error);
+      return [];
+    }
+  }
+
   private async extractCoopBankTransactionsCoordinate(buffer: Buffer, parsedText: string): Promise<Transaction[]> {
     try {
       // Use the coordinate-based parser for Co-op Bank's specific column layout
