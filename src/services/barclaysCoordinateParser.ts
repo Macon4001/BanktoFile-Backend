@@ -2,6 +2,13 @@ import { Transaction } from "../types/index.js";
 import { PDFCoordinateExtractor, TextElement } from "./pdfCoordinateExtractor.js";
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+// Header labels - business statements add a currency suffix ("Money out £")
+const MONEY_OUT_HEADER = /^Money out(\s*£)?$/i;
+const MONEY_IN_HEADER = /^Money in(\s*£)?$/i;
+const BALANCE_HEADER = /^Balance(\s*£)?$/i;
+// Rows carrying a balance but no transaction
+const OPENING_ROW = /\b(Start balance|Balance brought forward)\b/i;
+const TABLE_END_ROW = /^(End balance|Continued|Anything Wrong\?|Barclays Bank)|Balance carried forward|Total Payments\/Receipts/i;
 const DATE_REGEX = /^(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$/i;
 // Column amounts: "1,234.56", overdrawn balances may carry a trailing "-" or "OD".
 // Also accepts a mistyped decimal comma ("21,18") - a thousands group always has 3 digits.
@@ -64,9 +71,9 @@ export class BarclaysCoordinateParser {
       const rows = this.extractor.groupIntoRows(pageElements, 2);
 
       const headerRow = rows.find(r =>
-        r.elements.some(e => /^Money out$/i.test(e.text)) &&
-        r.elements.some(e => /^Money in$/i.test(e.text)) &&
-        r.elements.some(e => /^Balance$/i.test(e.text))
+        r.elements.some(e => MONEY_OUT_HEADER.test(e.text)) &&
+        r.elements.some(e => MONEY_IN_HEADER.test(e.text)) &&
+        r.elements.some(e => BALANCE_HEADER.test(e.text))
       );
       if (!headerRow) continue;
 
@@ -75,10 +82,12 @@ export class BarclaysCoordinateParser {
 
       // Table ends at the first footer marker below the header
       const endRow = rows.find(r => r.y > headerRow.y &&
-        r.elements.some(e => /^(End balance|Continued|Anything Wrong\?)/i.test(e.text) || /^Barclays Bank/i.test(e.text)));
+        r.elements.some(e => TABLE_END_ROW.test(e.text)));
       const tableEndY = endRow ? endRow.y : Infinity;
 
-      const tableElements = pageElements.filter(e => e.y > headerRow.y + 2 && e.y < tableEndY - 2);
+      // Right bound: business statements print the "At a glance" box beside the table
+      const tableElements = pageElements.filter(e =>
+        e.y > headerRow.y + 2 && e.y < tableEndY - 2 && e.x < columns.balanceRight + 10);
       // Some PDFs split text into touching fragments ("22" "," "267.05", "0" "9" "Dec"),
       // so stitch each row back together before classifying anything
       const tableRows = this.extractor.groupIntoRows(tableElements, 2)
@@ -90,8 +99,8 @@ export class BarclaysCoordinateParser {
       const pageAnchors: Anchor[] = [];
 
       for (const row of tableRows) {
-        // "Start balance" row becomes the opening balance, not a transaction
-        if (row.elements.some(e => /^Start balance$/i.test(e.text))) {
+        // "Start balance" / "Balance brought forward" rows: the first becomes the opening balance
+        if (row.elements.some(e => OPENING_ROW.test(e.text))) {
           if (!openingBalance) {
             const dateMatch = row.elements.filter(e => e.x < columns.dateRight).map(e => e.text).join(" ").match(DATE_REGEX);
             const balanceEl = row.elements.find(e => e.x >= columns.amountsLeft && this.parseAmount(e.text) !== null);
@@ -228,9 +237,9 @@ export class BarclaysCoordinateParser {
   private detectColumns(header: TextElement[]): BarclaysColumns {
     const find = (re: RegExp) => header.find(e => re.test(e.text))!;
     const description = header.find(e => /^Description$/i.test(e.text));
-    const moneyOut = find(/^Money out$/i);
-    const moneyIn = find(/^Money in$/i);
-    const balance = find(/^Balance$/i);
+    const moneyOut = find(MONEY_OUT_HEADER);
+    const moneyIn = find(MONEY_IN_HEADER);
+    const balance = find(BALANCE_HEADER);
 
     return {
       // Small margin: unindented text (e.g. "Start balance") can sit exactly at the header's x
@@ -292,11 +301,12 @@ export class BarclaysCoordinateParser {
    * Transactions in months after the end month belong to the previous year (Dec→Jan statements).
    */
   private detectStatementPeriod(text: string): { endYear: number; endMonthIdx: number } {
-    const period = text.match(/\d{1,2}\s+[A-Za-z]{3}(?:\s+\d{4})?\s*-\s*\d{1,2}\s+([A-Za-z]{3})\s+(\d{4})/);
+    // "01 Feb - 15 Mar 2026", "28 Nov 2024 - 15 Feb 2025", "04 - 31 Mar 2022"
+    const period = text.match(/\d{1,2}(?:\s+[A-Za-z]{3,9})?(?:\s+\d{4})?\s*-\s*\d{1,2}\s+([A-Za-z]{3})[a-z]*\s+(\d{4})/);
     if (period) {
       return { endYear: parseInt(period[2], 10), endMonthIdx: MONTHS.indexOf(period[1].toLowerCase()) };
     }
-    const statementDate = text.match(/Statement date\s+\d{1,2}\s+([A-Za-z]{3})\w*\s+(\d{4})/i);
+    const statementDate = text.match(/(?:Statement date|Issued on)\s+\d{1,2}\s+([A-Za-z]{3})\w*\s+(\d{4})/i);
     if (statementDate) {
       return { endYear: parseInt(statementDate[2], 10), endMonthIdx: MONTHS.indexOf(statementDate[1].toLowerCase()) };
     }

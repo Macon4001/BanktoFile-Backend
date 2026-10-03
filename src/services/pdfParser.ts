@@ -153,7 +153,8 @@ export class PDFParser {
       if (isBarclays) {
         console.log("Detected Barclays statement - using coordinate-based parser");
         const transactions = await this.extractBarclaysTransactionsCoordinate(buffer, text);
-        if (transactions.length > 0) {
+        // A lone "Start balance" row means the table layout wasn't recognised
+        if (transactions.some(t => !t.isOpeningBalance)) {
           return {
             transactions,
             metadata: this.extractMetadata(text),
