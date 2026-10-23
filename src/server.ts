@@ -155,6 +155,7 @@ async function initializeServices() {
 app.listen(PORT, async () => {
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`🟢 Node.js: ${process.version}`);
   console.log(`🔗 Health check: http://localhost:${PORT}/health`);
 
   // Debug: Check for pdftoppm in PATH

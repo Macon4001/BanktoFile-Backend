@@ -13,6 +13,9 @@
     "sync-stripe": "tsx scripts/syncStripeSubscriptions.ts",
     "check-expired": "tsx scripts/checkExpiredSubscriptions.ts"
   },
+  "engines": {
+    "node": ">=22.23.4"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
